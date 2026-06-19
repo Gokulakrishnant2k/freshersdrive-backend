@@ -1,3 +1,4 @@
 Chnages to application_properties file in backend
 contact file Chnages
 admin mail id chnages 
+render acct, environmental variables
