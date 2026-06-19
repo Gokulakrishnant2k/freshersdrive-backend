@@ -48,6 +48,11 @@ public class Drive {
     @Column(columnDefinition = "TEXT")
     private String jobDescription;
 
+    // Comma-separated (or freeform) list of key skills required for the role.
+    // Optional — only shown on the Drive Details page when present.
+    @Column(columnDefinition = "TEXT")
+    private String keySkills;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private JobCategory category;
