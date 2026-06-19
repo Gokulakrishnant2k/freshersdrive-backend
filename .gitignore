@@ -1,0 +1,29 @@
+﻿# Maven build output
+target/
+*.class
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Sensitive config and credentials
+application-local.properties
+client_secret_*.json
+*.json.bak
+
+# File uploads (real user data, never commit)
+uploads/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Nested frontend project (has its own separate git repo)
+freshersdrive-frontend/
+
+# Java modernization tool artifacts
+.github/modernize/
