@@ -63,7 +63,16 @@ public class SecurityConfig {
                 // Public read-only drive data the calendar page needs
                 .requestMatchers(HttpMethod.GET, "/drives/**").permitAll()
 
+                // Create / edit drives: admin or employee
+                .requestMatchers(HttpMethod.POST, "/drives").hasAnyRole("ADMIN", "EMPLOYEE")
+                .requestMatchers(HttpMethod.PUT,  "/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
+
+                // Delete drives: admin only
+                .requestMatchers(HttpMethod.DELETE, "/drives/**").hasRole("ADMIN")
+
+                // User management, promote/demote, delete users: admin only
                 .requestMatchers("/admin/**").hasRole("ADMIN")
+
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2

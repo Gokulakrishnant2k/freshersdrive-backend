@@ -1,0 +1,11 @@
+# 1. Backend first
+cd freshersdrive-backend
+git add .
+git commit -m "add keySkills and other fields"
+git push
+# Wait for Render to finish deploying (~2-3 min)
+
+# 2. Then frontend
+cd freshersdrive-frontend
+npm run build
+npm run deploy

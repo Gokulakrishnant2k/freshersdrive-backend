@@ -69,8 +69,9 @@ public class DriveController {
     }
 
     // ── CREATE ───────────────────────────────────────────────────────────────
+    // Admin or Employee can create drives
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
     public ResponseEntity<Drive> createDrive(@Valid @RequestBody DriveDto.Request req) {
         Drive drive = mapToDrive(req, new Drive());
         Drive saved = driveRepository.save(drive);
@@ -79,8 +80,9 @@ public class DriveController {
     }
 
     // ── UPDATE ───────────────────────────────────────────────────────────────
+    // Admin or Employee can update drives
     @PutMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
     public ResponseEntity<Drive> updateDrive(
             @PathVariable Long id,
             @Valid @RequestBody DriveDto.Request req) {
@@ -103,6 +105,7 @@ public class DriveController {
     }
 
     // ── DELETE ───────────────────────────────────────────────────────────────
+    // Admin only
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<String> deleteDrive(@PathVariable Long id) {
@@ -114,6 +117,7 @@ public class DriveController {
     }
 
     // ── TOGGLE AUTO-DELETE ───────────────────────────────────────────────────
+    // Admin only
     @PatchMapping("/{id}/auto-delete")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Drive> toggleAutoDelete(@PathVariable Long id) {
