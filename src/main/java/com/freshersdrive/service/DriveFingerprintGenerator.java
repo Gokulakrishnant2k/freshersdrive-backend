@@ -1,4 +1,4 @@
-﻿package com.freshersdrive.service;
+package com.freshersdrive.service;
 
 import org.springframework.stereotype.Component;
 import org.springframework.util.DigestUtils;

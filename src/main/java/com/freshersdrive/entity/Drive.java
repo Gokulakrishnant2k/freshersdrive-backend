@@ -1,6 +1,8 @@
 package com.freshersdrive.entity;
 
 import com.freshersdrive.enums.DriveStatus;
+import com.freshersdrive.enums.DriveSource;
+import com.freshersdrive.enums.ReviewStatus;
 import com.freshersdrive.enums.JobCategory;
 import jakarta.persistence.*;
 import lombok.*;
@@ -25,9 +27,6 @@ public class Drive {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // =========================
-    // COMPANY INFO
-    // =========================
     @Column(nullable = false, length = 200)
     private String companyName;
 
@@ -39,17 +38,12 @@ public class Drive {
 
     private String companyWebsite;
 
-    // =========================
-    // DRIVE INFO
-    // =========================
     @Column(nullable = false, length = 200)
     private String jobRole;
 
     @Column(columnDefinition = "TEXT")
     private String jobDescription;
 
-    // Comma-separated (or freeform) list of key skills required for the role.
-    // Optional — only shown on the Drive Details page when present.
     @Column(columnDefinition = "TEXT")
     private String keySkills;
 
@@ -57,19 +51,14 @@ public class Drive {
     @Column(nullable = false)
     private JobCategory category;
 
-    private String jobType; // Full-Time, Internship, Contract
+    private String jobType;
 
-    // =========================
-    // LOCATION
-    // =========================
     @Column(length = 500)
     private String location;
 
+    @Builder.Default
     private Boolean isRemote = false;
 
-    // =========================
-    // PACKAGE
-    // =========================
     private BigDecimal ctcMin;
 
     private BigDecimal ctcMax;
@@ -78,9 +67,6 @@ public class Drive {
 
     private String stipend;
 
-    // =========================
-    // ELIGIBILITY
-    // =========================
     @Column(columnDefinition = "TEXT")
     private String eligibleDegrees;
 
@@ -92,27 +78,19 @@ public class Drive {
     @Column(columnDefinition = "TEXT")
     private String eligibleBatches;
 
-    // Freshers, 0-1 Years, 1-2 Years, etc.
+    @Builder.Default
     private String experienceLevel = "Freshers";
 
     private Integer maxBacklogs;
 
     private String otherEligibilityCriteria;
 
-    // =========================
-    // SELECTION PROCESS
-    // =========================
     @Column(columnDefinition = "TEXT")
     private String selectionProcess;
 
     @Column(columnDefinition = "TEXT")
     private String selectionDetails;
 
-    // =========================
-    // APPLY DETAILS
-    // =========================
-
-    // The actual day of the campus/recruitment drive
     private LocalDate driveDate;
 
     @Column(nullable = false)
@@ -124,17 +102,32 @@ public class Drive {
     @Column(nullable = false)
     private DriveStatus status;
 
-    // =========================
-    // AUTO DELETE
-    // =========================
+    @Builder.Default
     private Boolean autoDeleteEnabled = false;
 
-    // =========================
-    // METADATA
-    // =========================
+    @Builder.Default
     private Boolean isFeatured = false;
 
+    @Builder.Default
     private Integer viewCount = 0;
+
+    // =========================
+    // AI DISCOVERY SUPPORT
+    // =========================
+
+    @Column(unique = true, length = 64)
+    private String fingerprint;
+
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private DriveSource source = DriveSource.MANUAL;
+
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private ReviewStatus reviewStatus = ReviewStatus.APPROVED;
+
+    @Builder.Default
+    private Boolean deadlineGuessed = false;
 
     @OneToMany(
             mappedBy = "drive",
