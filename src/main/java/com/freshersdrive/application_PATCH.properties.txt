@@ -1,0 +1,25 @@
+# ============================================================
+# ADD to src/main/resources/application.properties
+# ============================================================
+
+gemini.api.key=${GEMINI_API_KEY}
+gemini.model=gemini-2.5-flash
+
+# ============================================================
+# Set the actual key as an ENVIRONMENT VARIABLE, never commit it:
+#   export GEMINI_API_KEY=your-actual-key-here
+# ============================================================
+
+# ============================================================
+# ALSO REQUIRED: enable @Scheduled support.
+# Add this annotation to your main Application class
+# (the one with @SpringBootApplication):
+#
+#   @SpringBootApplication
+#   @EnableScheduling
+#   public class FreshersdriveApplication {
+#       public static void main(String[] args) {
+#           SpringApplication.run(FreshersdriveApplication.class, args);
+#       }
+#   }
+# ============================================================

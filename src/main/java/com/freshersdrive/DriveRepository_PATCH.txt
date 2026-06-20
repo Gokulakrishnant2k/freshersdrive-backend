@@ -1,0 +1,54 @@
+// ============================================================
+// PATCH NOTES for Drive.java — apply these by hand
+// ============================================================
+//
+// 1) ADD these imports at the top, alongside the existing ones:
+//
+//    import com.freshersdrive.enums.DriveSource;
+//    import com.freshersdrive.enums.ReviewStatus;
+//
+// 2) ADD these fields inside the Drive class — placed here as a new
+//    section, suggest right after the existing METADATA section
+//    (after viewCount, before the @OneToMany relations):
+
+    // =========================
+    // AI DISCOVERY SUPPORT
+    // =========================
+
+    // Dedup key: normalized hash of (companyName, jobRole, location).
+    // Unique so the DB itself enforces no duplicate postings.
+    @Column(unique = true, length = 64)
+    private String fingerprint;
+
+    // Where this drive came from. Defaults to MANUAL for anything saved
+    // through the existing AddDrive flow (Builder.Default handles that).
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private DriveSource source = DriveSource.MANUAL;
+
+    // Review state for AI-discovered drives. Manually-added drives are
+    // APPROVED immediately since a human typed them in directly.
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private ReviewStatus reviewStatus = ReviewStatus.APPROVED;
+
+    // True if `deadline` was a guessed fallback (driveDate + 30 days)
+    // because AI extraction couldn't find a real deadline on the page.
+    // Surface this in the admin review UI so deadlines get checked.
+    @Builder.Default
+    private Boolean deadlineGuessed = false;
+
+// 3) IMPORTANT: because Drive uses @Builder (Lombok), the @Builder.Default
+//    annotations above are required for the defaults to actually apply
+//    when using Drive.builder()...build() WITHOUT explicitly setting that
+//    field. Without @Builder.Default, Lombok's builder silently ignores
+//    the field initializer and the field is null/false regardless of what
+//    you wrote above. This matters for your existing AddDrive flow, which
+//    presumably uses Drive.builder() too — double check AddDrive's save
+//    path still compiles and sets reviewStatus correctly (or doesn't set
+//    it, relying on this default of APPROVED).
+//
+// 4) MIGRATION REQUIRED: fingerprint is unique, so existing rows in your
+//    drives table need a backfilled fingerprint before you add a unique
+//    constraint, or the migration will fail outright on existing data.
+//    See DriveBackfillRunner.java for a one-time runner that does this.
