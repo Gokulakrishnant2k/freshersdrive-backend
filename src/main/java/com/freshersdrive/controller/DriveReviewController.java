@@ -18,7 +18,7 @@ import java.util.List;
  * ProtectedRoute on the frontend).
  */
 @RestController
-@RequestMapping("/api/admin/drives/pending")
+@RequestMapping("/admin/drives/pending")
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
 public class DriveReviewController {
