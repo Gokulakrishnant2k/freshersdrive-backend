@@ -5,7 +5,7 @@ public enum JobCategory {
     CORE_ENGINEERING,
     GOVERNMENT,
     INTERNSHIP,
-    OFF_CAMPUS,
     BANKING,
-    MANAGEMENT
+    MANAGEMENT,
+    OTHERS
 }

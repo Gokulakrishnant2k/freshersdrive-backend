@@ -4,6 +4,7 @@ import com.freshersdrive.dto.ScrapedDriveDTO;
 import com.freshersdrive.entity.Drive;
 import com.freshersdrive.enums.DriveSource;
 import com.freshersdrive.enums.DriveStatus;
+import com.freshersdrive.enums.JobCategory;
 import com.freshersdrive.enums.ReviewStatus;
 import com.freshersdrive.repository.DriveRepository;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,13 @@ import java.util.List;
 public class DriveIngestionService {
 
     private static final int FALLBACK_DEADLINE_DAYS_OUT = 30;
+
+    // Used when Gemini's "category" field is missing or doesn't match a real
+    // JobCategory constant (typo, hallucinated value, etc.). AI-discovered
+    // listings are inherently off-campus in nature, so this is a reasonable
+    // default - revisit if you want stricter handling (e.g. drop the record
+    // instead of guessing).
+    private static final JobCategory FALLBACK_CATEGORY = JobCategory.OTHERS;
 
     private final DriveRepository driveRepository;
     private final DriveFingerprintGenerator fingerprintGenerator;
@@ -67,6 +75,8 @@ public class DriveIngestionService {
             deadlineWasGuessed = true;
         }
 
+        JobCategory category = resolveCategory(dto);
+
         Drive drive = Drive.builder()
             .companyName(dto.company())
             .jobRole(dto.role())
@@ -74,6 +84,7 @@ public class DriveIngestionService {
             .jobDescription(dto.description())
             .applyLink(dto.sourceUrl())
             .deadline(deadline)
+            .category(category)
             .fingerprint(fingerprint)
             .deadlineGuessed(deadlineWasGuessed)
             .reviewStatus(ReviewStatus.PENDING_REVIEW)
@@ -84,8 +95,31 @@ public class DriveIngestionService {
             .build();
 
         driveRepository.save(drive);
-        log.info("Ingested new drive [{}] {} - {} (deadline guessed: {})",
-            source, dto.company(), dto.role(), deadlineWasGuessed);
+        log.info("Ingested new drive [{}] {} - {} (category: {}, deadline guessed: {})",
+            source, dto.company(), dto.role(), category, deadlineWasGuessed);
+    }
+
+    /**
+     * Validates Gemini's free-text category guess against the real enum.
+     * Anything missing, mistyped, or hallucinated falls back to
+     * FALLBACK_CATEGORY rather than failing the whole record - getting a
+     * drive saved with an approximate category beats losing it entirely,
+     * since an admin reviews every record before it goes live anyway.
+     */
+    private JobCategory resolveCategory(ScrapedDriveDTO dto) {
+        String raw = dto.category();
+        if (raw == null || raw.isBlank()) {
+            log.warn("No category returned for {} - {}, defaulting to {}",
+                dto.company(), dto.role(), FALLBACK_CATEGORY);
+            return FALLBACK_CATEGORY;
+        }
+        try {
+            return JobCategory.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            log.warn("Unrecognized category '{}' for {} - {}, defaulting to {}",
+                raw, dto.company(), dto.role(), FALLBACK_CATEGORY);
+            return FALLBACK_CATEGORY;
+        }
     }
 
     private LocalDate parseDeadline(String raw) {

@@ -11,5 +11,6 @@ public record ScrapedDriveDTO(
     String location,
     String applicationDeadline, // "YYYY-MM-DD" string or null; parsed to LocalDate at save time
     String sourceUrl,
-    String description
+    String description,
+    String category // expected to be one of the JobCategory enum names; validated/mapped at save time
 ) {}
