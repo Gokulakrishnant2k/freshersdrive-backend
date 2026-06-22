@@ -72,14 +72,7 @@ public class SecurityConfig {
                 // ── Drive deletion: admin only ──────────────────────────────
                 .requestMatchers(HttpMethod.DELETE, "/drives/**").hasRole("ADMIN")
 
-                // ── AI Discovery: admin only ────────────────────────────────
-                // Manually trigger a discovery run or review pending drives.
-                // IMPORTANT: delete or lock DiscoveryTestController before
-                // making this production-only — as-is it costs a Gemini API
-                // call on every request.
-                .requestMatchers("/api/admin/discovery/**").hasRole("ADMIN")
-
-                // ── Admin panel endpoints ───────────────────────────────────
+                // ── Admin panel endpoints (includes discovery) ──────────────
                 .requestMatchers("/admin/**").hasRole("ADMIN")
 
                 // ── Everything else requires authentication ─────────────────
