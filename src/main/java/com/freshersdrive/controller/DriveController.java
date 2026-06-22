@@ -3,6 +3,7 @@ package com.freshersdrive.controller;
 import com.freshersdrive.dto.DriveDto;
 import com.freshersdrive.entity.Drive;
 import com.freshersdrive.enums.DriveStatus;
+import com.freshersdrive.enums.ReviewStatus;
 import com.freshersdrive.repository.DriveRepository;
 import com.freshersdrive.service.DriveNotificationService;
 import com.freshersdrive.service.DriveService;
@@ -27,10 +28,12 @@ public class DriveController {
     private final DriveService              driveService;
     private final DriveNotificationService  driveNotificationService;
 
-    // ── GET ALL ──────────────────────────────────────────────────────────────
+    // ── GET ALL — only APPROVED drives for public ────────────────────────────
     @GetMapping
     public ResponseEntity<List<Drive>> getAllDrives() {
-        return ResponseEntity.ok(driveRepository.findAll());
+        return ResponseEntity.ok(
+            driveRepository.findByReviewStatus(ReviewStatus.APPROVED)
+        );
     }
 
     // ── GET BY ID ────────────────────────────────────────────────────────────
@@ -41,13 +44,14 @@ public class DriveController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // ── RECOMMENDED ──────────────────────────────────────────────────────────
+    // ── RECOMMENDED — only APPROVED drives ───────────────────────────────────
     @GetMapping("/recommended")
     public ResponseEntity<List<Drive>> getRecommendedDrives(
             @RequestParam(required = false) String branch,
             @RequestParam(required = false) String batch) {
 
-        List<Drive> recommended = driveRepository.findAll().stream()
+        List<Drive> recommended = driveRepository.findByReviewStatus(ReviewStatus.APPROVED)
+                .stream()
                 .filter(drive -> {
                     boolean branchMatch = true;
                     if (branch != null && !branch.isBlank()
@@ -69,18 +73,16 @@ public class DriveController {
     }
 
     // ── CREATE ───────────────────────────────────────────────────────────────
-    // Admin or Employee can create drives
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
     public ResponseEntity<Drive> createDrive(@Valid @RequestBody DriveDto.Request req) {
         Drive drive = mapToDrive(req, new Drive());
-        Drive saved = driveRepository.save(drive);
-        driveNotificationService.notifyAllStudentsNewDrive(saved); // async, respects toggle
+        Drive saved = driveService.createDrive(drive); // ← use service, not repo directly
+        // No notification here — students are notified only after admin approval
         return ResponseEntity.ok(saved);
     }
 
     // ── UPDATE ───────────────────────────────────────────────────────────────
-    // Admin or Employee can update drives
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
     public ResponseEntity<Drive> updateDrive(
@@ -97,7 +99,7 @@ public class DriveController {
                     Drive saved  = driveRepository.save(updated);
 
                     if (isCancelling) {
-                        driveNotificationService.notifyRegisteredStudentsCancellation(saved); // async
+                        driveNotificationService.notifyRegisteredStudentsCancellation(saved);
                     }
                     return ResponseEntity.ok(saved);
                 })
@@ -105,7 +107,6 @@ public class DriveController {
     }
 
     // ── DELETE ───────────────────────────────────────────────────────────────
-    // Admin only
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<String> deleteDrive(@PathVariable Long id) {
@@ -117,7 +118,6 @@ public class DriveController {
     }
 
     // ── TOGGLE AUTO-DELETE ───────────────────────────────────────────────────
-    // Admin only
     @PatchMapping("/{id}/auto-delete")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Drive> toggleAutoDelete(@PathVariable Long id) {
@@ -210,8 +210,6 @@ public class DriveController {
         drive.setSelectionProcess(req.getSelectionProcess());
         drive.setSelectionDetails(req.getSelectionDetails());
 
-        // driveDate: the actual day of the campus drive (optional)
-        // Falls back to deadline if not provided, so the calendar always has something to show
         drive.setDriveDate(req.getDriveDate() != null ? req.getDriveDate() : req.getDeadline());
         drive.setDeadline(req.getDeadline());
         drive.setApplyLink(req.getApplyLink());

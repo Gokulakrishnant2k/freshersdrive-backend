@@ -19,9 +19,11 @@ import java.util.List;
 @Repository
 public interface DriveRepository extends JpaRepository<Drive, Long> {
 
+    // ── Public search: only APPROVED drives ───────────────────────────────
     @Query("""
         SELECT d FROM Drive d
         WHERE d.status = :status
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
         AND (
             LOWER(d.companyName) LIKE LOWER(CONCAT('%', :keyword, '%'))
             OR LOWER(d.jobRole) LIKE LOWER(CONCAT('%', :keyword, '%'))
@@ -32,9 +34,11 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
                              @Param("status") DriveStatus status,
                              Pageable pageable);
 
+    // ── Public list search: only APPROVED and not PENDING drives ──────────
     @Query("""
         SELECT d FROM Drive d
         WHERE d.status != com.freshersdrive.enums.DriveStatus.PENDING
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
         AND (
             LOWER(d.companyName) LIKE LOWER(CONCAT('%', :keyword, '%'))
             OR LOWER(d.jobRole) LIKE LOWER(CONCAT('%', :keyword, '%'))
@@ -43,29 +47,82 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
     """)
     List<Drive> searchDrives(@Param("keyword") String keyword);
 
-    Page<Drive> findByStatusAndCategory(DriveStatus status, JobCategory category, Pageable pageable);
-
-    Page<Drive> findByStatusOrderByDeadlineAsc(DriveStatus status, Pageable pageable);
-
-    List<Drive> findTop6ByStatusAndIsFeaturedTrueOrderByDeadlineAsc(DriveStatus status);
-
-    List<Drive> findByStatusAndDeadlineGreaterThanEqualOrderByDeadlineAsc(
-            DriveStatus status,
-            LocalDate date
-    );
-
-    List<Drive> findByDeadlineGreaterThanEqualOrderByDeadlineAsc(LocalDate date);
-
-    @Query("SELECT d FROM Drive d WHERE d.deadline BETWEEN :start AND :end")
-    List<Drive> findDrivesInDateRange(@Param("start") LocalDate start,
-                                       @Param("end") LocalDate end);
-
-    @Query("SELECT d FROM Drive d WHERE YEAR(d.deadline) = :year AND MONTH(d.deadline) = :month")
-    List<Drive> findByYearAndMonth(@Param("year") int year, @Param("month") int month);
-
+    // ── Public paginated by status + category: only APPROVED ──────────────
     @Query("""
         SELECT d FROM Drive d
         WHERE d.status = :status
+        AND d.category = :category
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+    """)
+    Page<Drive> findByStatusAndCategory(@Param("status") DriveStatus status,
+                                        @Param("category") JobCategory category,
+                                        Pageable pageable);
+
+    // ── Public paginated by status ordered by deadline: only APPROVED ──────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.status = :status
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+        ORDER BY d.deadline ASC
+    """)
+    Page<Drive> findByStatusOrderByDeadlineAsc(@Param("status") DriveStatus status,
+                                               Pageable pageable);
+
+    // ── Featured drives: only APPROVED ────────────────────────────────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.status = :status
+        AND d.isFeatured = true
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+        ORDER BY d.deadline ASC
+    """)
+    List<Drive> findTop6ByStatusAndIsFeaturedTrueOrderByDeadlineAsc(
+            @Param("status") DriveStatus status);
+
+    // ── Upcoming drives from a date: only APPROVED ─────────────────────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.status = :status
+        AND d.deadline >= :date
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+        ORDER BY d.deadline ASC
+    """)
+    List<Drive> findByStatusAndDeadlineGreaterThanEqualOrderByDeadlineAsc(
+            @Param("status") DriveStatus status,
+            @Param("date") LocalDate date);
+
+    // ── All upcoming from a date (no status filter): only APPROVED ─────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.deadline >= :date
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+        ORDER BY d.deadline ASC
+    """)
+    List<Drive> findByDeadlineGreaterThanEqualOrderByDeadlineAsc(@Param("date") LocalDate date);
+
+    // ── Date range (calendar/reminders): only APPROVED ────────────────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.deadline BETWEEN :start AND :end
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+    """)
+    List<Drive> findDrivesInDateRange(@Param("start") LocalDate start,
+                                      @Param("end") LocalDate end);
+
+    // ── Calendar month view: only APPROVED ────────────────────────────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE YEAR(d.deadline) = :year
+        AND MONTH(d.deadline) = :month
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+    """)
+    List<Drive> findByYearAndMonth(@Param("year") int year, @Param("month") int month);
+
+    // ── Eligible drives for a student profile: only APPROVED ──────────────
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.status = :status
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
         AND d.minCgpa <= :cgpa
         AND (d.eligibleBatches LIKE CONCAT('%', :batch, '%'))
         AND (d.eligibleBranches LIKE '%ALL%' OR d.eligibleBranches LIKE CONCAT('%', :branch, '%'))
@@ -107,12 +164,9 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
     // REVIEW PANEL SUPPORT
     // =========================
 
-    // Last 5 approved drives for reference panel
     List<Drive> findTop5ByReviewStatusOrderByUpdatedAtDesc(ReviewStatus reviewStatus);
 
-    // Rejected drives older than X days for auto-delete
     List<Drive> findByReviewStatusAndUpdatedAtBefore(ReviewStatus reviewStatus, LocalDateTime cutoff);
 
-    // Approved drives paginated
     Page<Drive> findByReviewStatusOrderByUpdatedAtDesc(ReviewStatus reviewStatus, Pageable pageable);
 }

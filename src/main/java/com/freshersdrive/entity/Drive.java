@@ -124,7 +124,7 @@ public class Drive {
 
     @Enumerated(EnumType.STRING)
     @Builder.Default
-    private ReviewStatus reviewStatus = ReviewStatus.APPROVED;
+    private ReviewStatus reviewStatus = ReviewStatus.PENDING_REVIEW;
 
     @Builder.Default
     private Boolean deadlineGuessed = false;

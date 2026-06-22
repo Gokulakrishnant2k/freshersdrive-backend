@@ -54,7 +54,8 @@ public class SecurityConfig {
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/*.html", "/css/**", "/js/**", "/static/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/test").permitAll()
-                .requestMatchers(HttpMethod.GET, "/health").permitAll()  // ← added
+                .requestMatchers(HttpMethod.GET, "/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/health").permitAll() // ← added for context-path
 
                 // ── Notification preference: must be authenticated ──────────
                 .requestMatchers(HttpMethod.GET,  "/drives/notify-preference").authenticated()

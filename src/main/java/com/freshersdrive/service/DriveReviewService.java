@@ -23,11 +23,12 @@ import java.util.stream.Collectors;
 public class DriveReviewService {
 
     private final DriveRepository driveRepository;
+    private final DriveService    driveService;   // for post-approval student notification
 
     // In-memory rate limit tracker: email -> list of rejection timestamps
     private final Map<String, List<LocalDateTime>> rejectionTracker = new ConcurrentHashMap<>();
 
-    private static final int  MAX_REJECTIONS_PER_HOUR = 5;
+    private static final int  MAX_REJECTIONS_PER_HOUR = 10; // ← was 5
     private static final long COOLDOWN_HOURS          = 1;
 
     // ── Fetch pending ──────────────────────────────────────────────────────
@@ -46,11 +47,25 @@ public class DriveReviewService {
     }
 
     // ── Approve ────────────────────────────────────────────────────────────
+    // Sets reviewStatus = APPROVED and status = UPCOMING, then notifies students.
     public Drive approve(Long driveId) {
         Drive drive = getOrThrow(driveId);
         drive.setReviewStatus(ReviewStatus.APPROVED);
         drive.setStatus(DriveStatus.UPCOMING);
-        return driveRepository.save(drive);
+
+        // Set deadline to today + 30 days if it was guessed and is in the past
+        if (Boolean.TRUE.equals(drive.getDeadlineGuessed())
+                && drive.getDeadline() != null
+                && drive.getDeadline().isBefore(LocalDate.now())) {
+            drive.setDeadline(LocalDate.now().plusDays(30));
+        }
+
+        Drive saved = driveRepository.save(drive);
+
+        // Notify all students now that the drive is live
+        driveService.notifyStudentsOfNewDrive(saved);
+
+        return saved;
     }
 
     // ── Reject (with rate limiting for non-admins) ─────────────────────────
@@ -87,8 +102,8 @@ public class DriveReviewService {
 
         if (fields.containsKey("deadline") && fields.get("deadline") != null) {
             try {
-                drive.setDeadline(LocalDate.parse(fields.get("deadline")));
-                drive.setDeadlineGuessed(false); // manually set = no longer guessed
+                drive.setDeadline(java.time.LocalDate.parse(fields.get("deadline")));
+                drive.setDeadlineGuessed(false);
             } catch (Exception ignored) {}
         }
 
@@ -105,7 +120,6 @@ public class DriveReviewService {
         List<LocalDateTime> timestamps = rejectionTracker
             .getOrDefault(email, new ArrayList<>());
 
-        // Remove timestamps older than 1 hour
         timestamps = timestamps.stream()
             .filter(t -> t.isAfter(oneHourAgo))
             .collect(Collectors.toList());

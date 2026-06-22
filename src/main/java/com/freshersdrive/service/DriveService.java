@@ -4,6 +4,7 @@ import com.freshersdrive.entity.Drive;
 import com.freshersdrive.entity.DriveRegistration;
 import com.freshersdrive.entity.User;
 import com.freshersdrive.enums.DriveStatus;
+import com.freshersdrive.enums.ReviewStatus;
 import com.freshersdrive.enums.Role;
 import com.freshersdrive.repository.DriveRegistrationRepository;
 import com.freshersdrive.repository.DriveRepository;
@@ -44,39 +45,44 @@ public class DriveService {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  NEW — create drive + notify all students
+    //  CREATE — save drive WITHOUT notifying students yet.
+    //  Notification is deferred until DriveReviewService.approve() is called.
+    //  The drive starts at ReviewStatus.PENDING_REVIEW (set by Drive entity
+    //  default), so it is invisible to students until an admin/employee
+    //  approves it.
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Save a new drive AND send "New Drive Alert" email to every student.
-     * Called from DriveController.createDrive().
-     */
     @Transactional
-    public Drive createDriveAndNotify(Drive drive) {
+    public Drive createDrive(Drive drive) {
         Drive saved = driveRepository.save(drive);
-
-        // Send alert to all (non-admin) users
-        List<User> students = userRepository.findAllByRole(Role.ROLE_USER);
-        for (User student : students) {
-            emailService.sendNewDriveAlert(student, saved);
-        }
-        log.info("New drive '{}' created — alert sent to {} students.",
-                saved.getCompanyName(), students.size());
-
+        log.info("Drive '{}' saved with status PENDING_REVIEW — awaiting approval before going live.",
+                saved.getCompanyName());
         return saved;
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  NEW — cancel drive + notify registered students
+    //  NOTIFY — called by DriveReviewService.approve() AFTER approval.
+    //  Sends "New Drive Alert" to every student only once the drive is live.
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Update drive status to CANCELLED and email every student who registered.
-     * Called from DriveController.updateDrive() when status changes to CANCELLED.
-     */
+    @Transactional
+    public void notifyStudentsOfNewDrive(Drive drive) {
+        List<User> students = userRepository.findAllByRole(Role.ROLE_USER);
+        for (User student : students) {
+            emailService.sendNewDriveAlert(student, drive);
+        }
+        log.info("New drive alert for '{}' sent to {} student(s).",
+                drive.getCompanyName(), students.size());
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  CANCEL — update status to CANCELLED and notify registered students.
+    //  Called from DriveController when status changes to CANCELLED.
+    // ════════════════════════════════════════════════════════════════════════
+
     @Transactional
     public Drive cancelDriveAndNotify(Drive drive) {
-        drive.setStatus(DriveStatus.CANCELLED); // FIXED: was drive.setStatus("CANCELLED")
+        drive.setStatus(DriveStatus.CANCELLED);
         Drive saved = driveRepository.save(drive);
 
         List<DriveRegistration> registrations = registrationRepository.findByDriveId(saved.getId());
@@ -84,20 +90,25 @@ public class DriveService {
             emailService.sendDriveCancellationNotice(
                     reg.getStudentEmail(), reg.getStudentName(), saved);
         }
-        log.info("Drive '{}' cancelled — notified {} registered students.",
+        log.info("Drive '{}' cancelled — notified {} registered student(s).",
                 saved.getCompanyName(), registrations.size());
 
         return saved;
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  NEW — student registers for a drive from the calendar
+    //  STUDENT REGISTRATION
     // ════════════════════════════════════════════════════════════════════════
 
     @Transactional
     public void registerStudent(Long driveId, String studentEmail, String studentName) {
         Drive drive = driveRepository.findById(driveId)
                 .orElseThrow(() -> new RuntimeException("Drive not found: " + driveId));
+
+        // Guard: students must not be able to register for unapproved drives
+        if (drive.getReviewStatus() != ReviewStatus.APPROVED) {
+            throw new IllegalStateException("Drive is not yet available for registration.");
+        }
 
         if (registrationRepository.existsByDriveIdAndStudentEmail(driveId, studentEmail)) {
             throw new IllegalStateException("You are already registered for this drive.");
@@ -109,48 +120,30 @@ public class DriveService {
         reg.setStudentName(studentName);
         registrationRepository.save(reg);
 
-        // Send confirmation email immediately
         emailService.sendRegistrationConfirmation(reg);
-
         log.info("Student '{}' registered for drive '{}'.", studentEmail, drive.getCompanyName());
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  NEW — Calendar queries
+    //  CALENDAR QUERIES — all filtered to APPROVED drives only (via repo)
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Returns drives for a specific calendar month — used by the frontend calendar grid.
-     * GET /api/drives/calendar?year=2025&month=7
-     */
     public List<Drive> getDrivesByMonth(int year, int month) {
         return driveRepository.findByYearAndMonth(year, month);
     }
 
-    /**
-     * Returns upcoming drives from today onwards — used by the sidebar list.
-     * GET /api/drives/upcoming
-     */
     public List<Drive> getUpcomingDrives() {
         return driveRepository.findByDeadlineGreaterThanEqualOrderByDeadlineAsc(LocalDate.now());
     }
 
-    /**
-     * Full-text search across company name and job role.
-     * GET /api/drives/search?q=TCS
-     */
     public List<Drive> searchDrives(String query) {
         return driveRepository.searchDrives(query);
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  NEW — Scheduled cron: 9 AM daily reminder to registered students
+    //  SCHEDULED — 9 AM daily deadline reminder to registered students
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Runs every day at 9:00 AM.
-     * Finds drives whose deadline is tomorrow and emails all registered students.
-     */
     @Scheduled(cron = "0 0 9 * * *")
     public void sendDayBeforeReminders() {
         LocalDate tomorrow = LocalDate.now().plusDays(1);
@@ -165,13 +158,12 @@ public class DriveService {
                         reg.getStudentEmail(), reg.getStudentName(), drive);
             }
 
-            // Also uses existing sendDeadlineReminderEmail for subscribed (non-registered) users
             List<User> subscribers = userRepository.findAllByRole(Role.ROLE_USER);
             for (User u : subscribers) {
                 emailService.sendDeadlineReminderEmail(u, drive);
             }
 
-            log.info("Reminder sent for '{}' — {} registered + {} subscribed students.",
+            log.info("Reminder sent for '{}' — {} registered + {} subscribed student(s).",
                     drive.getCompanyName(), registrations.size(), subscribers.size());
         }
     }
