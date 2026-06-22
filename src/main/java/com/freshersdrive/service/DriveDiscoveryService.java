@@ -13,20 +13,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Calls the Gemini API to discover new drive listings two ways:
- *  1. discoverNewDrives()  - open-ended: Google Search + url_context combined,
- *                            for finding postings on sites you haven't listed.
- *  2. discoverFromUrls()   - targeted: url_context only, against a fixed list
- *                            of known fresher job boards that render server-side HTML.
- *
- * Both return ScrapedDriveDTO lists; DriveIngestionService handles dedup + saving.
- *
- * NOTE ON URL SELECTION:
- * Only server-side rendered sites work with url_context. JS-heavy sites like
- * LinkedIn, Naukri, and Instahyre are excluded because Gemini cannot read them.
- * The open-ended search in discoverNewDrives() covers those indirectly.
- */
 @Slf4j
 @Service
 public class DriveDiscoveryService {
@@ -52,63 +38,39 @@ public class DriveDiscoveryService {
         otherwise classify by field.
         """;
 
-    /**
-     * Sites that reliably work with Gemini url_context (server-side rendered,
-     * no login wall, actively lists fresher/entry-level jobs in India).
-     *
-     * Excluded (JS-rendered or login-required):
-     *   - linkedin.com       → login required
-     *   - naukri.com         → JS rendered
-     *   - instahyre.com      → JS rendered
-     *   - internshala.com    → JS rendered
-     *   - shine.com          → JS rendered
-     */
     private static final List<String> TARGET_URLS = List.of(
-        // Fresher-specific job boards
         "https://www.freshersworld.com/jobs/freshers",
         "https://www.fresherslive.com/latest-jobs",
         "https://www.freshersnow.com/category/job-notifications/",
         "https://www.freshersvoice.com/category/jobs/it-jobs/",
-
-        // Campus / off-campus drives aggregators
         "https://dare2compete.com/opportunities/jobs",
         "https://unstop.com/jobs",
         "https://www.placementindia.com/fresher-jobs.htm",
-
-        // Company career pages that render server-side
         "https://nextstep.tcs.com/campus",
         "https://career.infosys.com/joblist",
         "https://careers.wipro.com/careers-home/jobs",
         "https://careers.cognizant.com/global/en/search-results",
         "https://www.hcltech.com/careers/students-and-freshers",
         "https://campus.accenture.com/in/en/students/pages/jobs.aspx",
-
-        // General job boards with good server-side rendering
         "https://www.monsterindia.com/freshers-jobs.html",
         "https://www.timesjobs.com/candidate/job-search.html?searchType=personalizedSearch&from=submit&txtKeywords=fresher&txtLocation=India",
         "https://www.wisdomjobs.com/e-university/freshers-jobs-in-india.html",
         "https://www.hirist.tech/jobs/fresher",
         "https://www.geeksforgeeks.org/jobs/",
-
-        // Govt / PSU jobs
         "https://www.sarkariresult.com/latestjob/",
         "https://www.freejobalert.com/latest-notifications/",
         "https://www.rojgarresult.com/"
     );
+
+    // Free tier limit: 5 requests per minute.
+    // 15 seconds between calls keeps us safely under that limit.
+    private static final long DELAY_BETWEEN_CALLS_MS = 15_000;
 
     private final RestClient restClient = RestClient.create(
         "https://generativelanguage.googleapis.com"
     );
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * Open-ended discovery: uses Google Search grounding to find fresher drives
-     * posted anywhere on the web in the last 7 days, then reads promising pages
-     * with url_context before extracting details.
-     *
-     * This is the primary discovery path and covers sites that TARGET_URLS
-     * cannot reach (LinkedIn, Naukri, etc.) indirectly via search snippets.
-     */
     public List<ScrapedDriveDTO> discoverNewDrives() {
         String prompt = """
             Search the web for campus placement drives, off-campus drives, and
@@ -157,20 +119,27 @@ public class DriveDiscoveryService {
         return callGemini(body);
     }
 
-    /**
-     * Targeted discovery: reads each URL in TARGET_URLS using url_context
-     * and extracts current job listings from it.
-     *
-     * Works best on server-side rendered pages. JS-heavy sites are excluded
-     * from TARGET_URLS intentionally — they're covered by discoverNewDrives().
-     */
     public List<ScrapedDriveDTO> discoverFromUrls() {
         List<ScrapedDriveDTO> allDrives = new ArrayList<>();
-        for (String url : TARGET_URLS) {
-            log.info("Checking URL: {}", url);
+        for (int i = 0; i < TARGET_URLS.size(); i++) {
+            String url = TARGET_URLS.get(i);
+            log.info("Checking URL ({}/{}): {}", i + 1, TARGET_URLS.size(), url);
             List<ScrapedDriveDTO> results = extractListingsFromUrl(url);
             log.info("Found {} listing(s) from {}", results.size(), url);
             allDrives.addAll(results);
+
+            // Rate limit: free tier allows 5 requests/min.
+            // Skip delay after the last URL.
+            if (i < TARGET_URLS.size() - 1) {
+                try {
+                    log.debug("Waiting {}ms before next Gemini call...", DELAY_BETWEEN_CALLS_MS);
+                    Thread.sleep(DELAY_BETWEEN_CALLS_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("URL discovery interrupted after {} URLs", i + 1);
+                    break;
+                }
+            }
         }
         return allDrives;
     }
@@ -227,14 +196,6 @@ public class DriveDiscoveryService {
         }
     }
 
-    /**
-     * Extracts the JSON array from Gemini's response text.
-     *
-     * Grounded responses (google_search / url_context enabled) frequently
-     * ignore "return ONLY JSON" instructions and add a leading sentence or
-     * trailing commentary, so we scan for the outermost [ ... ] instead of
-     * just stripping markdown fences.
-     */
     @SuppressWarnings("unchecked")
     private List<ScrapedDriveDTO> parseGeminiResponse(Map<String, Object> response) {
         if (response == null) {
@@ -254,7 +215,6 @@ public class DriveDiscoveryService {
 
             Map<String, Object> candidate = candidates.get(0);
 
-            // Check finish reason — SAFETY / RECITATION / MAX_TOKENS produce no content
             String finishReason = (String) candidate.get("finishReason");
             if (finishReason != null && !finishReason.equals("STOP") && !finishReason.equals("MAX_TOKENS")) {
                 log.warn("Gemini finished with reason: {}. Skipping.", finishReason);
@@ -275,7 +235,6 @@ public class DriveDiscoveryService {
                 return List.of();
             }
 
-            // Concatenate all text parts (grounded responses sometimes split across parts)
             StringBuilder sb = new StringBuilder();
             for (Map<String, Object> part : parts) {
                 Object t = part.get("text");
@@ -288,7 +247,6 @@ public class DriveDiscoveryService {
                 return List.of();
             }
 
-            // Extract outermost JSON array
             int start = text.indexOf('[');
             int end   = text.lastIndexOf(']');
             if (start == -1 || end == -1 || end < start) {
