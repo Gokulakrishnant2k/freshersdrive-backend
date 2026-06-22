@@ -48,10 +48,12 @@ public class SecurityConfig {
                 session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
             )
             .authorizeHttpRequests(auth -> auth
+                // ── Public endpoints ────────────────────────────────────────
                 .requestMatchers("/auth/**").permitAll()
                 .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/*.html", "/css/**", "/js/**", "/static/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/test").permitAll()
 
                 // ── Notification preference: must be authenticated ──────────
                 // These two rules MUST come before the broad GET /drives/** permitAll
@@ -60,19 +62,27 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET,  "/drives/notify-preference").authenticated()
                 .requestMatchers(HttpMethod.POST, "/drives/notify-preference").authenticated()
 
-                // Public read-only drive data the calendar page needs
+                // ── Public read-only drive data ─────────────────────────────
                 .requestMatchers(HttpMethod.GET, "/drives/**").permitAll()
 
-                // Create / edit drives: admin or employee
+                // ── Drive management: admin or employee ─────────────────────
                 .requestMatchers(HttpMethod.POST, "/drives").hasAnyRole("ADMIN", "EMPLOYEE")
                 .requestMatchers(HttpMethod.PUT,  "/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
 
-                // Delete drives: admin only
+                // ── Drive deletion: admin only ──────────────────────────────
                 .requestMatchers(HttpMethod.DELETE, "/drives/**").hasRole("ADMIN")
 
-                // User management, promote/demote, delete users: admin only
+                // ── AI Discovery: admin only ────────────────────────────────
+                // Manually trigger a discovery run or review pending drives.
+                // IMPORTANT: delete or lock DiscoveryTestController before
+                // making this production-only — as-is it costs a Gemini API
+                // call on every request.
+                .requestMatchers("/api/admin/discovery/**").hasRole("ADMIN")
+
+                // ── Admin panel endpoints ───────────────────────────────────
                 .requestMatchers("/admin/**").hasRole("ADMIN")
 
+                // ── Everything else requires authentication ─────────────────
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2
