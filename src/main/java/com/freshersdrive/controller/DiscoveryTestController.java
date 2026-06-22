@@ -26,7 +26,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/admin/discovery")
+@RequestMapping("/admin/discovery")
 @RequiredArgsConstructor
 public class DiscoveryTestController {
 
