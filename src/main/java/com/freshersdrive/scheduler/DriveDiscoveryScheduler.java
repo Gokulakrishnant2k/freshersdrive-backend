@@ -21,11 +21,9 @@ public class DriveDiscoveryScheduler {
     private final DriveIngestionService ingestionService;
     private final RssFeedDiscoveryService rssFeedDiscoveryService;
 
-    @Scheduled(cron = "0 0 */6 * * *") // every 6 hours = 4 Gemini calls/day
-    public void runDiscovery() {
-        log.info("Starting scheduled drive discovery run...");
-
-        // AI-powered search (1 Gemini call)
+    @Scheduled(cron = "0 0 */6 * * *") // every 6 hours = 4 Gemini calls/day (free tier safe)
+    public void runAiDiscovery() {
+        log.info("Starting scheduled AI discovery run...");
         try {
             List<ScrapedDriveDTO> searchResults = discoveryService.discoverNewDrives();
             ingestionService.ingest(searchResults, DriveSource.AI_SEARCH);
@@ -33,8 +31,12 @@ public class DriveDiscoveryScheduler {
         } catch (Exception e) {
             log.error("AI_SEARCH discovery path failed", e);
         }
+        log.info("AI discovery run complete.");
+    }
 
-        // RSS feeds (free, no API calls)
+    @Scheduled(cron = "0 */30 * * * *") // every 30 minutes — RSS is free, no limits
+    public void runRssDiscovery() {
+        log.info("Starting scheduled RSS discovery run...");
         try {
             List<ScrapedDriveDTO> rssResults = rssFeedDiscoveryService.discoverFromRssFeeds();
             ingestionService.ingest(rssResults, DriveSource.RSS_FEED);
@@ -42,7 +44,6 @@ public class DriveDiscoveryScheduler {
         } catch (Exception e) {
             log.error("RSS_FEED discovery path failed", e);
         }
-
-        log.info("Drive discovery run complete.");
+        log.info("RSS discovery run complete.");
     }
 }
