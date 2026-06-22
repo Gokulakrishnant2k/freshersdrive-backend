@@ -54,6 +54,7 @@ public class SecurityConfig {
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/*.html", "/css/**", "/js/**", "/static/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/test").permitAll()
+                .requestMatchers(HttpMethod.GET, "/health").permitAll()  // ← added
 
                 // ── Notification preference: must be authenticated ──────────
                 .requestMatchers(HttpMethod.GET,  "/drives/notify-preference").authenticated()
@@ -70,14 +71,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/drives/**").hasRole("ADMIN")
 
                 // ── User management: admin only ─────────────────────────────
-                // MUST come before the broad /admin/** rule below
                 .requestMatchers("/admin/users/**").hasRole("ADMIN")
 
                 // ── Discovery trigger: admin only ───────────────────────────
                 .requestMatchers("/admin/discovery/**").hasRole("ADMIN")
 
                 // ── Drive review: admin and employee ───────────────────────
-                // Employees can access pending/rejected/approve/reject/edit
                 .requestMatchers("/admin/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
 
                 // ── Everything else under /admin: admin only ────────────────
