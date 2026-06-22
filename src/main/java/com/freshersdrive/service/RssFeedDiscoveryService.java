@@ -8,6 +8,7 @@ import com.rometools.rome.io.XmlReader;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,8 +25,8 @@ public class RssFeedDiscoveryService {
         "https://www.freshersworld.com/feed",
         "https://www.sarkariresult.com/feed/",
         "https://www.rojgarresult.com/feed/",
-        "https://www.freshersnow.com/feed/",
-        "https://www.employment-news.org/feed/"
+        "https://www.freshersnow.com/feed/"
+        // removed employment-news.org — hangs indefinitely
     );
 
     // Keywords to identify fresher/entry-level jobs
@@ -77,8 +78,14 @@ public class RssFeedDiscoveryService {
     private List<ScrapedDriveDTO> parseFeed(String feedUrl) throws Exception {
         List<ScrapedDriveDTO> drives = new ArrayList<>();
 
+        URL url = new URL(feedUrl);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setConnectTimeout(5000);   // 5 seconds to connect
+        connection.setReadTimeout(10000);     // 10 seconds to read
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0");
+
         SyndFeedInput input = new SyndFeedInput();
-        SyndFeed feed = input.build(new XmlReader(new URL(feedUrl)));
+        SyndFeed feed = input.build(new XmlReader(connection.getInputStream()));
 
         for (SyndEntry entry : feed.getEntries()) {
             try {
@@ -109,8 +116,7 @@ public class RssFeedDiscoveryService {
         // For govt job sites, include all posts since they're all job-related
         boolean isGovtSite = feedUrl.contains("sarkari") ||
                              feedUrl.contains("rojgar") ||
-                             feedUrl.contains("freejobalert") ||
-                             feedUrl.contains("employment-news");
+                             feedUrl.contains("freejobalert");
 
         if (!isFresherRelated && !isGovtSite) {
             return null;
@@ -140,7 +146,6 @@ public class RssFeedDiscoveryService {
     private String extractDescription(SyndEntry entry) {
         if (entry.getDescription() != null &&
             entry.getDescription().getValue() != null) {
-            // Strip HTML tags
             return entry.getDescription().getValue()
                 .replaceAll("<[^>]+>", " ")
                 .replaceAll("\\s+", " ")
@@ -150,8 +155,6 @@ public class RssFeedDiscoveryService {
     }
 
     private String extractCompany(String title, String description) {
-        // Try to extract company from common patterns like "Company Name Recruitment 2025"
-        // or "Company Name Hiring Freshers"
         String[] parts = title.split("(?i)\\s+(recruitment|hiring|jobs|vacancy|notification|careers)");
         if (parts.length > 0 && !parts[0].isBlank()) {
             return parts[0].trim();
@@ -191,7 +194,6 @@ public class RssFeedDiscoveryService {
     }
 
     private String extractDeadline(String text) {
-        // Try to find dates like "31 December 2025", "2025-12-31", "31/12/2025"
         Pattern datePattern = Pattern.compile(
             "(\\d{4}-\\d{2}-\\d{2})|" +
             "(\\d{1,2}/\\d{1,2}/\\d{4})|" +
@@ -203,6 +205,6 @@ public class RssFeedDiscoveryService {
         if (matcher.find()) {
             return matcher.group().trim();
         }
-        return null; // DriveIngestionService will use fallback of 30 days
+        return null;
     }
 }
