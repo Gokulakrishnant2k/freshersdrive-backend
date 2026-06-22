@@ -2,6 +2,7 @@ package com.freshersdrive.scheduler;
 
 import com.freshersdrive.entity.Drive;
 import com.freshersdrive.repository.DriveRepository;
+import com.freshersdrive.service.DriveReviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -13,22 +14,27 @@ import java.util.List;
 @RequiredArgsConstructor
 public class DriveCleanupScheduler {
 
-    private final DriveRepository driveRepository;
+    private final DriveRepository    driveRepository;
+    private final DriveReviewService driveReviewService;
 
+    // ── Delete expired drives (deadline > 30 days ago, auto-delete ON) ─────
     @Scheduled(cron = "0 0 2 * * *") // daily 2 AM
     public void deleteExpiredDrives() {
-
         LocalDate cutoff = LocalDate.now().minusDays(30);
 
         List<Drive> expired = driveRepository.findByDeadlineBefore(cutoff);
 
-        // ONLY delete if auto-delete is ON
         List<Drive> toDelete = expired.stream()
                 .filter(d -> Boolean.TRUE.equals(d.getAutoDeleteEnabled()))
                 .toList();
 
         driveRepository.deleteAll(toDelete);
+        System.out.println("Auto-deleted expired drives: " + toDelete.size());
+    }
 
-        System.out.println("Auto-deleted drives: " + toDelete.size());
+    // ── Delete rejected AI-discovered drives older than 3 days ────────────
+    @Scheduled(cron = "0 0 3 * * *") // daily 3 AM
+    public void deleteOldRejectedDrives() {
+        driveReviewService.deleteOldRejected();
     }
 }

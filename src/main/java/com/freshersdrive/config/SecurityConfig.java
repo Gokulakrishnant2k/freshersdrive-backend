@@ -56,9 +56,6 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/test").permitAll()
 
                 // ── Notification preference: must be authenticated ──────────
-                // These two rules MUST come before the broad GET /drives/** permitAll
-                // below, otherwise Spring would match that rule first and allow
-                // unauthenticated access to the preference endpoints.
                 .requestMatchers(HttpMethod.GET,  "/drives/notify-preference").authenticated()
                 .requestMatchers(HttpMethod.POST, "/drives/notify-preference").authenticated()
 
@@ -72,7 +69,18 @@ public class SecurityConfig {
                 // ── Drive deletion: admin only ──────────────────────────────
                 .requestMatchers(HttpMethod.DELETE, "/drives/**").hasRole("ADMIN")
 
-                // ── Admin panel endpoints (includes discovery) ──────────────
+                // ── User management: admin only ─────────────────────────────
+                // MUST come before the broad /admin/** rule below
+                .requestMatchers("/admin/users/**").hasRole("ADMIN")
+
+                // ── Discovery trigger: admin only ───────────────────────────
+                .requestMatchers("/admin/discovery/**").hasRole("ADMIN")
+
+                // ── Drive review: admin and employee ───────────────────────
+                // Employees can access pending/rejected/approve/reject/edit
+                .requestMatchers("/admin/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
+
+                // ── Everything else under /admin: admin only ────────────────
                 .requestMatchers("/admin/**").hasRole("ADMIN")
 
                 // ── Everything else requires authentication ─────────────────

@@ -13,6 +13,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Repository
@@ -101,4 +102,17 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
     List<Drive> findByReviewStatus(ReviewStatus reviewStatus);
 
     long countByReviewStatus(ReviewStatus reviewStatus);
+
+    // =========================
+    // REVIEW PANEL SUPPORT
+    // =========================
+
+    // Last 5 approved drives for reference panel
+    List<Drive> findTop5ByReviewStatusOrderByUpdatedAtDesc(ReviewStatus reviewStatus);
+
+    // Rejected drives older than X days for auto-delete
+    List<Drive> findByReviewStatusAndUpdatedAtBefore(ReviewStatus reviewStatus, LocalDateTime cutoff);
+
+    // Approved drives paginated
+    Page<Drive> findByReviewStatusOrderByUpdatedAtDesc(ReviewStatus reviewStatus, Pageable pageable);
 }
