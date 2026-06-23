@@ -1,5 +1,5 @@
 # 1. Backend first
-cd freshersdrive-backend
+cd frontend
 git add .
 git commit -m "add keySkills and other fields"
 git push

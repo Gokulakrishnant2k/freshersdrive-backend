@@ -110,8 +110,8 @@ public class DriveDiscoveryService {
                 "parts", List.of(Map.of("text", prompt))
             )),
             "tools", List.of(
-                Map.of("google_search", Map.of()),
-                Map.of("url_context", Map.of())
+                Map.of("google_search", Map.of())
+                
             )
         );
 
