@@ -21,7 +21,8 @@ public class DriveDiscoveryScheduler {
     private final DriveIngestionService ingestionService;
     private final RssFeedDiscoveryService rssFeedDiscoveryService;
 
-    @Scheduled(cron = "0 0 */6 * * *") // every 6 hours = 4 Gemini calls/day (free tier safe)
+    // 4 Gemini calls/day — free tier safe
+    @Scheduled(cron = "0 0 */6 * * *")
     public void runAiDiscovery() {
         log.info("Starting scheduled AI discovery run...");
         try {
@@ -34,7 +35,8 @@ public class DriveDiscoveryScheduler {
         log.info("AI discovery run complete.");
     }
 
-    @Scheduled(cron = "0 */30 * * * *") // every 30 minutes — RSS is free, no limits
+    // 8 Gemini calls/day — slowed from 30 min to avoid quota exhaustion
+    @Scheduled(cron = "0 0 */3 * * *")
     public void runRssDiscovery() {
         log.info("Starting scheduled RSS discovery run...");
         try {
@@ -45,5 +47,20 @@ public class DriveDiscoveryScheduler {
             log.error("RSS_FEED discovery path failed", e);
         }
         log.info("RSS discovery run complete.");
+    }
+
+    // 42 Gemini calls/day (21 URLs x 2 runs) — runs twice a day
+    // Note: each run takes ~5 min due to 15s delay between URLs (rate limit safety)
+    @Scheduled(cron = "0 0 */12 * * *")
+    public void runUrlDiscovery() {
+        log.info("Starting scheduled URL scraping run...");
+        try {
+            List<ScrapedDriveDTO> results = discoveryService.discoverFromUrls();
+            ingestionService.ingest(results, DriveSource.AI_SEARCH);
+            log.info("URL scraping path returned {} candidate(s)", results.size());
+        } catch (Exception e) {
+            log.error("URL scraping discovery path failed", e);
+        }
+        log.info("URL scraping run complete.");
     }
 }
