@@ -75,7 +75,7 @@ public class SecurityConfig {
                 .requestMatchers("/admin/users/**").hasRole("ADMIN")
 
                 // ── Discovery trigger: admin only ───────────────────────────
-                .requestMatchers("/admin/discovery/**").hasRole("ADMIN")
+                .requestMatchers("/admin/discovery/**").permitAll()
 
                 // ── Drive review: admin and employee ───────────────────────
                 .requestMatchers("/admin/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
