@@ -17,7 +17,7 @@ public class DriveCleanupScheduler {
     private final DriveRepository    driveRepository;
     private final DriveReviewService driveReviewService;
 
-    // ── Delete expired drives (deadline > 30 days ago, auto-delete ON) ─────
+    // ── Delete drives where autoExpireAfter30Days=true and deadline > 30 days ago ──
     @Scheduled(cron = "0 0 2 * * *") // daily 2 AM
     public void deleteExpiredDrives() {
         LocalDate cutoff = LocalDate.now().minusDays(30);
@@ -25,7 +25,7 @@ public class DriveCleanupScheduler {
         List<Drive> expired = driveRepository.findByDeadlineBefore(cutoff);
 
         List<Drive> toDelete = expired.stream()
-                .filter(d -> Boolean.TRUE.equals(d.getAutoDeleteEnabled()))
+                .filter(d -> Boolean.TRUE.equals(d.getAutoExpireAfter30Days()))
                 .toList();
 
         driveRepository.deleteAll(toDelete);

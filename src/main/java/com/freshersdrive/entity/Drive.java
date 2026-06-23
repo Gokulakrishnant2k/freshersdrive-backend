@@ -129,6 +129,10 @@ public class Drive {
     @Builder.Default
     private Boolean deadlineGuessed = false;
 
+    // Auto-delete drive 30 days after deadline — default ON
+    @Builder.Default
+    private Boolean autoExpireAfter30Days = true;
+
     @OneToMany(
             mappedBy = "drive",
             cascade = CascadeType.ALL,
