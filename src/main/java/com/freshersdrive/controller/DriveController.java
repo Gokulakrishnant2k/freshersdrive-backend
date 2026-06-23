@@ -44,6 +44,14 @@ public class DriveController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // ── FEATURED DRIVES — only APPROVED ──────────────────────────────────────
+    @GetMapping("/featured")
+    public ResponseEntity<List<Drive>> getFeaturedDrives() {
+        return ResponseEntity.ok(
+            driveRepository.findTop6ByStatusAndIsFeaturedTrueOrderByDeadlineAsc(DriveStatus.ACTIVE)
+        );
+    }
+
     // ── RECOMMENDED — only APPROVED drives ───────────────────────────────────
     @GetMapping("/recommended")
     public ResponseEntity<List<Drive>> getRecommendedDrives(
@@ -77,8 +85,7 @@ public class DriveController {
     @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
     public ResponseEntity<Drive> createDrive(@Valid @RequestBody DriveDto.Request req) {
         Drive drive = mapToDrive(req, new Drive());
-        Drive saved = driveService.createDrive(drive); // ← use service, not repo directly
-        // No notification here — students are notified only after admin approval
+        Drive saved = driveService.createDrive(drive);
         return ResponseEntity.ok(saved);
     }
 
@@ -115,6 +122,23 @@ public class DriveController {
         }
         driveRepository.deleteById(id);
         return ResponseEntity.ok("Drive deleted successfully");
+    }
+
+    // ── TOGGLE FEATURED (highlight) ──────────────────────────────────────────
+    @PatchMapping("/{id}/featured")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> toggleFeatured(@PathVariable Long id) {
+        return driveRepository.findById(id)
+                .map(drive -> {
+                    boolean nowFeatured = !(Boolean.TRUE.equals(drive.getIsFeatured()));
+                    drive.setIsFeatured(nowFeatured);
+                    driveRepository.save(drive);
+                    return ResponseEntity.ok(Map.<String, Object>of(
+                        "id", id,
+                        "isFeatured", nowFeatured
+                    ));
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     // ── TOGGLE AUTO-DELETE ───────────────────────────────────────────────────
