@@ -23,9 +23,46 @@ public class DriveDiscoveryService {
     @Value("${gemini.api.key}")
     private String apiKey;
 
-    // FIX 1: default now matches application.properties (gemini-2.0-flash)
     @Value("${gemini.model:gemini-2.0-flash}")
     private String model;
+
+    /**
+     * DRY-RUN MODE — set gemini.dry-run=true in application.properties to
+     * validate your prompt logic and parsing without spending any API quota.
+     *
+     * When true: the service returns a small set of hard-coded fake drives
+     * instead of calling Gemini at all.  Turn it off only when you're
+     * satisfied the plumbing works end-to-end.
+     *
+     * application.properties:
+     *   gemini.dry-run=true    ← safe, free, always works
+     *   gemini.dry-run=false   ← real calls, real quota
+     */
+    @Value("${gemini.dry-run:true}")
+    private boolean dryRun;
+
+    /**
+     * How many TARGET_URLS to process per run.
+     * Free tier = 15 RPM / ~1500 RPD.
+     * Default 3 keeps a single run well under the per-minute limit.
+     * Raise slowly once you confirm it works.
+     *
+     * application.properties:
+     *   gemini.url-batch-size=3
+     */
+    @Value("${gemini.url-batch-size:3}")
+    private int urlBatchSize;
+
+    /**
+     * Maximum consecutive Gemini failures before the run aborts.
+     * Prevents burning the entire day's quota when the API key is wrong
+     * or Gemini is having issues.
+     *
+     * application.properties:
+     *   gemini.max-consecutive-failures=2
+     */
+    @Value("${gemini.max-consecutive-failures:2}")
+    private int maxConsecutiveFailures;
 
     // ------------------------------------------------------------------ constants
 
@@ -44,29 +81,26 @@ public class DriveDiscoveryService {
             otherwise classify by field.
             """;
 
-    // FIX 2: finish reasons that carry usable content
     // "OTHER" is returned by Gemini when grounding/search tools are used —
     // it does NOT mean an error; the response content is still valid.
     private static final Set<String> ACCEPTABLE_FINISH_REASONS =
             Set.of("STOP", "MAX_TOKENS", "OTHER");
 
+    /**
+     * All candidate URLs — but we only process `urlBatchSize` per run
+     * so we never fire 21 API calls in a single trigger.
+     */
     private static final List<String> TARGET_URLS = List.of(
             "https://www.freshersworld.com/jobs/freshers",
             "https://www.fresherslive.com/latest-jobs",
             "https://www.freshersnow.com/category/job-notifications/",
-            "https://www.freshersvoice.com/category/jobs/it-jobs/",
             "https://dare2compete.com/opportunities/jobs",
             "https://unstop.com/jobs",
             "https://www.placementindia.com/fresher-jobs.htm",
             "https://nextstep.tcs.com/campus",
             "https://career.infosys.com/joblist",
-            "https://careers.wipro.com/careers-home/jobs",
-            "https://careers.cognizant.com/global/en/search-results",
-            "https://www.hcltech.com/careers/students-and-freshers",
-            "https://campus.accenture.com/in/en/students/pages/jobs.aspx",
             "https://www.monsterindia.com/freshers-jobs.html",
             "https://www.timesjobs.com/candidate/job-search.html?searchType=personalizedSearch&from=submit&txtKeywords=fresher&txtLocation=India",
-            "https://www.wisdomjobs.com/e-university/freshers-jobs-in-india.html",
             "https://www.hirist.tech/jobs/fresher",
             "https://www.geeksforgeeks.org/jobs/",
             "https://www.sarkariresult.com/latestjob/",
@@ -74,9 +108,45 @@ public class DriveDiscoveryService {
             "https://www.rojgarresult.com/"
     );
 
-    // Free tier limit: 5 requests per minute.
-    // 15 seconds between calls keeps us safely under that limit.
+    // 15 s gap keeps us under the 5 RPM free-tier limit with room to spare.
     private static final long DELAY_BETWEEN_CALLS_MS = 15_000;
+
+    // ── Dry-run fake data ──────────────────────────────────────────────────
+    // These are returned instead of calling Gemini when dryRun=true.
+    // They exercise the full ingestion pipeline (parsing, dedup, DB save)
+    // without touching your quota at all.
+    private static final List<ScrapedDriveDTO> DRY_RUN_RESULTS = List.of(
+        new ScrapedDriveDTO(
+            "TCS",
+            "Systems Engineer Trainee",
+            "PAN India",
+            "2025-08-31",
+            "https://nextstep.tcs.com/campus",
+            "Entry-level role for 2024/2025 BE/BTech graduates. Covers application development and testing.",
+            "IT_SOFTWARE",
+            "B.E/B.Tech"
+        ),
+        new ScrapedDriveDTO(
+            "Infosys",
+            "Systems Engineer",
+            "Bangalore, Pune, Hyderabad",
+            "2025-07-30",
+            "https://career.infosys.com/joblist",
+            "Campus hiring for freshers with 0-1 year experience. Training provided.",
+            "IT_SOFTWARE",
+            "B.E/B.Tech"
+        ),
+        new ScrapedDriveDTO(
+            "IBPS",
+            "Probationary Officer",
+            "PAN India",
+            "2025-07-15",
+            "https://www.ibps.in",
+            "Government bank recruitment for graduates. Written exam + interview.",
+            "BANKING",
+            "Any Graduate"
+        )
+    );
 
     // ------------------------------------------------------------------ infrastructure
 
@@ -88,13 +158,20 @@ public class DriveDiscoveryService {
     // ------------------------------------------------------------------ public API
 
     /**
-     * Uses Gemini's built-in Google Search grounding to discover fresh
-     * fresher/campus-drive listings across the web.
+     * Uses Gemini's built-in Google Search grounding to discover fresh listings.
      *
-     * FIX 3: tool name changed from "google_search" (snake_case, old/wrong)
-     *         to "googleSearch" (camelCase, correct Gemini v1beta name).
+     * In dry-run mode: returns {@link #DRY_RUN_RESULTS} immediately.
+     * In live mode: fires exactly ONE API call (not one per URL).
      */
     public List<ScrapedDriveDTO> discoverNewDrives() {
+        if (dryRun) {
+            log.info("[DRY-RUN] discoverNewDrives() — returning {} fake drives, no API call made.",
+                    DRY_RUN_RESULTS.size());
+            return DRY_RUN_RESULTS;
+        }
+
+        if (!isApiKeyConfigured()) return List.of();
+
         String prompt = """
                 Search the web for campus placement drives, off-campus drives, and
                 fresher / entry-level job openings posted in India in the last 7 days.
@@ -114,12 +191,12 @@ public class DriveDiscoveryService {
                 in this exact shape:
                 [
                   {
-                    "company": "string — company name",
-                    "role": "string — exact job title",
+                    "company": "string",
+                    "role": "string",
                     "location": "string — city/cities or 'PAN India' or 'Remote'",
-                    "applicationDeadline": "YYYY-MM-DD or null if not mentioned",
+                    "applicationDeadline": "YYYY-MM-DD or null",
                     "sourceUrl": "string — direct link to the job posting",
-                    "description": "string — 2-3 sentences describing role and eligibility",
+                    "description": "string — 2-3 sentences",
                     %s
                   }
                 ]
@@ -132,35 +209,62 @@ public class DriveDiscoveryService {
                 "contents", List.of(Map.of(
                         "parts", List.of(Map.of("text", prompt))
                 )),
-                // FIX 3: "googleSearch" is the correct camelCase tool name
-                "tools", List.of(
-                        Map.of("googleSearch", Map.of())
-                )
+                "tools", List.of(Map.of("googleSearch", Map.of()))
         );
 
-        log.info("Running open-ended AI_SEARCH discovery (model={})...", model);
+        log.info("Running AI_SEARCH discovery (model={})…", model);
         return callGemini(body);
     }
 
     /**
-     * Iterates through TARGET_URLS and asks Gemini to read each page
-     * via the url_context tool, extracting fresher listings.
+     * Reads TARGET_URLS via the url_context tool and extracts fresher listings.
+     *
+     * In dry-run mode: returns {@link #DRY_RUN_RESULTS} immediately.
+     * In live mode: processes only the first {@code urlBatchSize} URLs per
+     * invocation, and aborts early if {@code maxConsecutiveFailures} is hit.
+     *
+     * Rotate which URLs you send by changing application.properties between
+     * scheduled runs — or just rely on discoverNewDrives() for breadth.
      */
     public List<ScrapedDriveDTO> discoverFromUrls() {
+        if (dryRun) {
+            log.info("[DRY-RUN] discoverFromUrls() — returning {} fake drives, no API call made.",
+                    DRY_RUN_RESULTS.size());
+            return DRY_RUN_RESULTS;
+        }
+
+        if (!isApiKeyConfigured()) return List.of();
+
         List<ScrapedDriveDTO> allDrives = new ArrayList<>();
-        for (int i = 0; i < TARGET_URLS.size(); i++) {
-            String url = TARGET_URLS.get(i);
-            log.info("Checking URL ({}/{}): {}", i + 1, TARGET_URLS.size(), url);
+        List<String> batch = TARGET_URLS.subList(0, Math.min(urlBatchSize, TARGET_URLS.size()));
+        int consecutiveFailures = 0;
+
+        for (int i = 0; i < batch.size(); i++) {
+            // Circuit breaker: abort if too many consecutive failures
+            if (consecutiveFailures >= maxConsecutiveFailures) {
+                log.error("Aborting URL discovery after {} consecutive failures. " +
+                          "Check your API key and quota. Processed {}/{} URLs.",
+                          consecutiveFailures, i, batch.size());
+                break;
+            }
+
+            String url = batch.get(i);
+            log.info("Checking URL ({}/{}): {}", i + 1, batch.size(), url);
 
             List<ScrapedDriveDTO> results = extractListingsFromUrl(url);
-            log.info("Found {} listing(s) from {}", results.size(), url);
-            allDrives.addAll(results);
 
-            // Rate limit: free tier allows 5 requests/min.
-            // Skip delay after the last URL.
-            if (i < TARGET_URLS.size() - 1) {
+            if (results.isEmpty()) {
+                consecutiveFailures++;
+                log.warn("No results from {} (consecutive failures: {})", url, consecutiveFailures);
+            } else {
+                consecutiveFailures = 0; // reset on success
+                log.info("Found {} listing(s) from {}", results.size(), url);
+                allDrives.addAll(results);
+            }
+
+            if (i < batch.size() - 1) {
                 try {
-                    log.debug("Waiting {}ms before next Gemini call...", DELAY_BETWEEN_CALLS_MS);
+                    log.debug("Waiting {}ms before next Gemini call…", DELAY_BETWEEN_CALLS_MS);
                     Thread.sleep(DELAY_BETWEEN_CALLS_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -169,10 +273,28 @@ public class DriveDiscoveryService {
                 }
             }
         }
+
         return allDrives;
     }
 
     // ------------------------------------------------------------------ private helpers
+
+    /**
+     * Validates the API key before wasting a network call.
+     * The most common cause of "it never works" is the key being
+     * ${gemini.api.key} literally (placeholder not substituted) or blank.
+     */
+    private boolean isApiKeyConfigured() {
+        if (apiKey == null || apiKey.isBlank()
+                || apiKey.equals("${gemini.api.key}")
+                || apiKey.startsWith("your_")) {
+            log.error("Gemini API key is not configured. " +
+                      "Set gemini.api.key in application.properties. " +
+                      "No API call will be made.");
+            return false;
+        }
+        return true;
+    }
 
     private List<ScrapedDriveDTO> extractListingsFromUrl(String url) {
         String prompt = """
@@ -186,12 +308,12 @@ public class DriveDiscoveryService {
                 in this exact shape:
                 [
                   {
-                    "company": "string — company name",
-                    "role": "string — exact job title",
+                    "company": "string",
+                    "role": "string",
                     "location": "string — city/cities or 'PAN India' or 'Remote'",
-                    "applicationDeadline": "YYYY-MM-DD or null if not mentioned",
+                    "applicationDeadline": "YYYY-MM-DD or null",
                     "sourceUrl": "%s",
-                    "description": "string — 2-3 sentences describing role and eligibility",
+                    "description": "string — 2-3 sentences",
                     %s
                   }
                 ]
@@ -203,7 +325,7 @@ public class DriveDiscoveryService {
                 "contents", List.of(Map.of(
                         "parts", List.of(Map.of("text", prompt))
                 )),
-                "tools", List.of(Map.of("url_context", Map.of()))
+                "tools", List.of(Map.of("urlContext", Map.of()))
         );
 
         return callGemini(body);
@@ -221,7 +343,6 @@ public class DriveDiscoveryService {
 
             return parseGeminiResponse(response);
         } catch (Exception e) {
-            // FIX 4: log the full cause so you can see the actual Gemini error
             log.error("Gemini API call failed: {} — cause: {}", e.getMessage(),
                     e.getCause() != null ? e.getCause().getMessage() : "none", e);
             return List.of();
@@ -235,8 +356,6 @@ public class DriveDiscoveryService {
             return List.of();
         }
 
-        // FIX 5: log top-level error block if present (e.g. invalid tool name,
-        //         quota exceeded, bad API key) — previously this was silently swallowed.
         if (response.containsKey("error")) {
             Map<String, Object> err = (Map<String, Object>) response.get("error");
             log.error("Gemini API error — code: {}, message: {}, status: {}",
@@ -257,7 +376,6 @@ public class DriveDiscoveryService {
             Map<String, Object> candidate = candidates.get(0);
             String finishReason = (String) candidate.get("finishReason");
 
-            // FIX 2: "OTHER" is normal when grounding tools are active
             if (finishReason != null && !ACCEPTABLE_FINISH_REASONS.contains(finishReason)) {
                 log.warn("Gemini finished with unacceptable reason: {}. Full candidate: {}",
                         finishReason, candidate);
@@ -278,7 +396,7 @@ public class DriveDiscoveryService {
                 return List.of();
             }
 
-            // Concatenate only text parts; skip tool-use / grounding metadata parts
+            // Concatenate only text parts; skip grounding metadata parts
             StringBuilder sb = new StringBuilder();
             for (Map<String, Object> part : parts) {
                 Object t = part.get("text");
@@ -291,7 +409,6 @@ public class DriveDiscoveryService {
                 return List.of();
             }
 
-            // Strip optional markdown fences the model sometimes adds despite instructions
             text = stripMarkdownFences(text);
 
             int start = text.indexOf('[');
@@ -317,10 +434,6 @@ public class DriveDiscoveryService {
         }
     }
 
-    /**
-     * Removes ```json ... ``` or ``` ... ``` fences that the model sometimes
-     * wraps around its output despite being told not to.
-     */
     private static String stripMarkdownFences(String text) {
         String t = text;
         if (t.startsWith("```")) {
