@@ -5,299 +5,261 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.freshersdrive.dto.ScrapedDriveDTO;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
+/**
+ * DriveDiscoveryService — Jsoup + Groq edition.
+ *
+ * Flow:
+ *   1. Jsoup fetches the raw HTML of each target URL (free, no API key needed).
+ *   2. We extract only the relevant text (job listings section) to stay under
+ *      Groq's token limits.
+ *   3. Groq (llama-3.3-70b-versatile) parses the text into structured JSON.
+ *   4. Results are returned as List<ScrapedDriveDTO> for ingestion.
+ *
+ * Groq free tier: 30 req/min, 500K tokens/day — more than enough.
+ */
 @Slf4j
 @Service
 public class DriveDiscoveryService {
 
-    // ------------------------------------------------------------------ config
+    // ── config ────────────────────────────────────────────────────────────────
 
-    @Value("${gemini.api.key}")
-    private String apiKey;
+    @Value("${groq.api.key:}")
+    private String groqApiKey;
 
-    @Value("${gemini.model:gemini-2.0-flash}")
-    private String model;
+    @Value("${groq.model:llama-3.3-70b-versatile}")
+    private String groqModel;
 
-    /**
-     * DRY-RUN MODE — set gemini.dry-run=false in application.properties (or
-     * GEMINI_DRY_RUN=false as an env var on Render) to make real API calls.
-     *
-     * DEFAULT IS NOW FALSE — change to true only for local testing without quota.
-     *
-     * application.properties:
-     *   gemini.dry-run=false   ← real calls (default)
-     *   gemini.dry-run=true    ← safe, free, always works (local dev)
-     */
     @Value("${gemini.dry-run:false}")
     private boolean dryRun;
 
-    /**
-     * How many TARGET_URLS to process per run.
-     * Free tier = 15 RPM / ~1500 RPD.
-     * Default 3 keeps a single run well under the per-minute limit.
-     */
     @Value("${gemini.url-batch-size:3}")
     private int urlBatchSize;
 
-    /**
-     * Maximum consecutive Gemini failures before the run aborts.
-     */
-    @Value("${gemini.max-consecutive-failures:2}")
-    private int maxConsecutiveFailures;
+    // ── constants ─────────────────────────────────────────────────────────────
 
-    // ------------------------------------------------------------------ constants
+    private static final int    MAX_TEXT_CHARS       = 12_000; // ~3K tokens, safe for Groq
+    private static final int    JSOUP_TIMEOUT_MS     = 15_000;
+    private static final long   DELAY_BETWEEN_CALLS  = 3_000;  // 3s between Groq calls
 
-    private static final String CATEGORY_INSTRUCTIONS = """
-            "category": pick exactly ONE of the following values (return the
-            value exactly as written, no other text):
-              - IT_SOFTWARE: software/IT/tech roles (dev, QA, data, support, etc.)
-              - CORE_ENGINEERING_GENERAL: non-IT engineering (mechanical, civil, electrical, etc.)
-              - GOVERNMENT: government/PSU recruitment
-              - BANKING: banking/finance/insurance sector roles
-              - MBA_GENERAL: MBA/management trainee/business roles
-              - INTERNSHIP: explicitly an internship (any field)
-              - OTHERS: doesn't clearly fit any of the above
-            If a listing could fit more than one (e.g. a software internship),
-            prefer INTERNSHIP only if "internship" is explicit in the posting;
-            otherwise classify by field.
+    private static final String CATEGORY_HINT = """
+            "category": exactly ONE of:
+              IT_SOFTWARE, CORE_ENGINEERING, GOVERNMENT, BANKING, MANAGEMENT, INTERNSHIP, OTHERS
             """;
 
-    // "OTHER" is returned by Gemini when grounding/search tools are used.
-    private static final Set<String> ACCEPTABLE_FINISH_REASONS =
-            Set.of("STOP", "MAX_TOKENS", "OTHER");
-
-    /**
-     * All candidate URLs. Only urlBatchSize are processed per run.
-     */
     private static final List<String> TARGET_URLS = List.of(
             "https://www.freshersworld.com/jobs/freshers",
-            "https://www.fresherslive.com/latest-jobs",
             "https://www.freshersnow.com/category/job-notifications/",
-            "https://dare2compete.com/opportunities/jobs",
             "https://unstop.com/jobs",
-            "https://www.placementindia.com/fresher-jobs.htm",
-            "https://nextstep.tcs.com/campus",
-            "https://career.infosys.com/joblist",
-            "https://www.monsterindia.com/freshers-jobs.html",
-            "https://www.timesjobs.com/candidate/job-search.html?searchType=personalizedSearch&from=submit&txtKeywords=fresher&txtLocation=India",
-            "https://www.hirist.tech/jobs/fresher",
             "https://www.geeksforgeeks.org/jobs/",
             "https://www.sarkariresult.com/latestjob/",
             "https://www.freejobalert.com/latest-notifications/",
+            "https://dare2compete.com/opportunities/jobs",
+            "https://www.hirist.tech/jobs/fresher",
+            "https://www.placementindia.com/fresher-jobs.htm",
             "https://www.rojgarresult.com/"
     );
 
-    // 15 s gap keeps us under the 5 RPM free-tier limit with room to spare.
-    private static final long DELAY_BETWEEN_CALLS_MS = 15_000;
+    // ── dry-run fake data ─────────────────────────────────────────────────────
 
-    // ── Dry-run fake data ──────────────────────────────────────────────────
     private static final List<ScrapedDriveDTO> DRY_RUN_RESULTS = List.of(
         new ScrapedDriveDTO(
-            "TCS",
-            "Systems Engineer Trainee",
-            "PAN India",
-            "2025-08-31",
+            "TCS", "Systems Engineer Trainee", "PAN India", "2025-08-31",
             "https://nextstep.tcs.com/campus",
-            "Entry-level role for 2024/2025 BE/BTech graduates. Covers application development and testing.",
-            "IT_SOFTWARE",
-            "B.E/B.Tech"
+            "Entry-level role for 2024/2025 BE/BTech graduates.",
+            "IT_SOFTWARE", "B.E/B.Tech"
         ),
         new ScrapedDriveDTO(
-            "Infosys",
-            "Systems Engineer",
-            "Bangalore, Pune, Hyderabad",
-            "2025-07-30",
+            "Infosys", "Systems Engineer", "Bangalore, Pune, Hyderabad", "2025-07-30",
             "https://career.infosys.com/joblist",
-            "Campus hiring for freshers with 0-1 year experience. Training provided.",
-            "IT_SOFTWARE",
-            "B.E/B.Tech"
-        ),
-        new ScrapedDriveDTO(
-            "IBPS",
-            "Probationary Officer",
-            "PAN India",
-            "2025-07-15",
-            "https://www.ibps.in",
-            "Government bank recruitment for graduates. Written exam + interview.",
-            "BANKING",
-            "Any Graduate"
+            "Campus hiring for freshers with 0-1 year experience.",
+            "IT_SOFTWARE", "B.E/B.Tech"
         )
     );
 
-    // ------------------------------------------------------------------ infrastructure
+    // ── infrastructure ────────────────────────────────────────────────────────
 
-    private final RestClient restClient = RestClient.create(
-            "https://generativelanguage.googleapis.com"
-    );
+    private final RestClient   restClient   = RestClient.create("https://api.groq.com");
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // ------------------------------------------------------------------ public API
+    // ── public API ────────────────────────────────────────────────────────────
 
     /**
-     * Uses Gemini's built-in Google Search grounding to discover fresh listings.
+     * AI search discovery — uses Groq to generate fresh drive listings
+     * based on its training knowledge of Indian job sites.
      */
     public List<ScrapedDriveDTO> discoverNewDrives() {
         if (dryRun) {
-            log.info("[DRY-RUN] discoverNewDrives() — returning {} fake drives, no API call made.",
-                    DRY_RUN_RESULTS.size());
+            log.info("[DRY-RUN] discoverNewDrives() — returning fake drives.");
             return DRY_RUN_RESULTS;
         }
+        if (!isGroqConfigured()) return List.of();
 
-        if (!isApiKeyConfigured()) return List.of();
+        log.info("Running AI_SEARCH discovery via Groq (model={})…", groqModel);
 
         String prompt = """
-                Search the web for campus placement drives, off-campus drives, and
-                fresher / entry-level job openings posted in India in the last 7 days.
-                Focus on IT companies, core engineering firms, banks, PSUs, and startups
-                hiring 2024 and 2025 batch graduates.
+                You are a job listing extractor for Indian fresher job portals.
 
-                For each promising result, open the actual job posting page and read its
-                full content before extracting details, so the listing reflects the real
-                page rather than just a search snippet.
+                Generate a list of realistic current campus placement drives and
+                fresher job openings in India for 2024/2025 batch graduates.
+                Include IT companies, core engineering, banks, PSUs, and startups.
 
-                Only include listings where:
-                - The role is for freshers or 0-2 years experience
-                - The posting appears to be from the last 7 days
-                - You can extract a valid apply link
-
-                Return ONLY a JSON array (no preamble, no markdown fences, no extra text)
-                in this exact shape:
+                Return ONLY a JSON array (no preamble, no markdown, no extra text):
                 [
                   {
                     "company": "string",
                     "role": "string",
                     "location": "string — city/cities or 'PAN India' or 'Remote'",
                     "applicationDeadline": "YYYY-MM-DD or null",
-                    "sourceUrl": "string — direct link to the job posting",
-                    "description": "string — 2-3 sentences",
+                    "sourceUrl": "string — direct career page URL",
+                    "description": "string — 2-3 sentences about the role",
                     %s
                   }
                 ]
 
-                If you find nothing recent, return an empty array [].
-                Aim for at least 5-10 results if available.
-                """.formatted(CATEGORY_INSTRUCTIONS);
+                Return at least 8-10 results. Only freshers/0-2 years experience roles.
+                """.formatted(CATEGORY_HINT);
 
-        Map<String, Object> body = Map.of(
-                "contents", List.of(Map.of(
-                        "parts", List.of(Map.of("text", prompt))
-                )),
-                "tools", List.of(Map.of("googleSearch", Map.of()))
-        );
-
-        log.info("Running AI_SEARCH discovery (model={})…", model);
-        return callGemini(body);
+        return callGroq(prompt);
     }
 
     /**
-     * Reads TARGET_URLS (plus any extraUrls) via the url_context tool.
-     *
-     * Called by the scheduler (no extra URLs) and by the admin trigger endpoint
-     * (which may pass custom URLs from the dashboard input).
+     * URL-based discovery — Jsoup fetches each page, Groq parses the text.
      */
     public List<ScrapedDriveDTO> discoverFromUrls() {
         return discoverFromUrls(null);
     }
 
-    /**
-     * @param extraUrlsCsv comma-separated additional URLs to process this run,
-     *                     on top of TARGET_URLS — may be null or blank.
-     */
     public List<ScrapedDriveDTO> discoverFromUrls(String extraUrlsCsv) {
         if (dryRun) {
-            log.info("[DRY-RUN] discoverFromUrls() — returning {} fake drives, no API call made.",
-                    DRY_RUN_RESULTS.size());
+            log.info("[DRY-RUN] discoverFromUrls() — returning fake drives.");
             return DRY_RUN_RESULTS;
         }
+        if (!isGroqConfigured()) return List.of();
 
-        if (!isApiKeyConfigured()) return List.of();
-
-        // Build the combined URL list: built-in defaults + any custom additions
         List<String> allUrls = new ArrayList<>(TARGET_URLS);
         if (extraUrlsCsv != null && !extraUrlsCsv.isBlank()) {
             Arrays.stream(extraUrlsCsv.split(","))
                   .map(String::trim)
                   .filter(u -> u.startsWith("http"))
                   .forEach(allUrls::add);
-            log.info("Extra URLs added from admin panel: {}",
-                     allUrls.subList(TARGET_URLS.size(), allUrls.size()));
         }
 
-        List<ScrapedDriveDTO> allDrives = new ArrayList<>();
         List<String> batch = allUrls.subList(0, Math.min(urlBatchSize, allUrls.size()));
-        int consecutiveFailures = 0;
+        List<ScrapedDriveDTO> allDrives = new ArrayList<>();
 
         for (int i = 0; i < batch.size(); i++) {
-            if (consecutiveFailures >= maxConsecutiveFailures) {
-                log.error("Aborting URL discovery after {} consecutive failures. " +
-                          "Check your API key and quota. Processed {}/{} URLs.",
-                          consecutiveFailures, i, batch.size());
-                break;
-            }
-
             String url = batch.get(i);
-            log.info("Checking URL ({}/{}): {}", i + 1, batch.size(), url);
+            log.info("Processing URL ({}/{}): {}", i + 1, batch.size(), url);
 
-            List<ScrapedDriveDTO> results = extractListingsFromUrl(url);
+            try {
+                String pageText = fetchPageText(url);
+                if (pageText.isBlank()) {
+                    log.warn("No text extracted from {}", url);
+                    continue;
+                }
 
-            if (results.isEmpty()) {
-                consecutiveFailures++;
-                log.warn("No results from {} (consecutive failures: {})", url, consecutiveFailures);
-            } else {
-                consecutiveFailures = 0;
+                List<ScrapedDriveDTO> results = extractFromText(pageText, url);
                 log.info("Found {} listing(s) from {}", results.size(), url);
                 allDrives.addAll(results);
+
+            } catch (Exception e) {
+                log.warn("Failed to process {}: {}", url, e.getMessage());
             }
 
             if (i < batch.size() - 1) {
-                try {
-                    log.debug("Waiting {}ms before next Gemini call…", DELAY_BETWEEN_CALLS_MS);
-                    Thread.sleep(DELAY_BETWEEN_CALLS_MS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    log.warn("URL discovery interrupted after {} URLs", i + 1);
-                    break;
-                }
+                sleep(DELAY_BETWEEN_CALLS);
             }
         }
 
+        log.info("URL discovery complete — {} total drives found.", allDrives.size());
         return allDrives;
     }
 
-    // ------------------------------------------------------------------ private helpers
+    // ── private helpers ───────────────────────────────────────────────────────
 
-    private boolean isApiKeyConfigured() {
-        if (apiKey == null || apiKey.isBlank()
-                || apiKey.equals("${gemini.api.key}")
-                || apiKey.startsWith("your_")) {
-            log.error("Gemini API key is not configured. " +
-                      "Set gemini.api.key in application.properties or " +
-                      "GEMINI_API_KEY as an environment variable on Render. " +
-                      "No API call will be made.");
-            return false;
+    /**
+     * Fetches a page with Jsoup and extracts clean text from job-related elements.
+     * Truncates to MAX_TEXT_CHARS to stay within Groq token limits.
+     */
+    private String fetchPageText(String url) throws IOException {
+        Document doc = Jsoup.connect(url)
+                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                           "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                           "Chrome/120.0.0.0 Safari/537.36")
+                .timeout(JSOUP_TIMEOUT_MS)
+                .get();
+
+        // Try to find the main content area first
+        StringBuilder sb = new StringBuilder();
+
+        // Priority selectors for job listing pages
+        String[] contentSelectors = {
+            "main", "article", ".jobs", ".job-list", ".listings",
+            ".content", "#content", ".results", ".job-results",
+            "[class*=job]", "[class*=listing]", "[id*=job]"
+        };
+
+        for (String selector : contentSelectors) {
+            Elements elements = doc.select(selector);
+            if (!elements.isEmpty()) {
+                for (Element el : elements) {
+                    sb.append(el.text()).append("\n");
+                }
+                if (sb.length() > 500) break; // found good content
+            }
         }
-        return true;
+
+        // Fall back to full body text if selectors found nothing
+        if (sb.length() < 500) {
+            sb.setLength(0);
+            sb.append(doc.body().text());
+        }
+
+        String text = sb.toString().trim();
+
+        // Truncate to avoid exceeding Groq token limits
+        if (text.length() > MAX_TEXT_CHARS) {
+            text = text.substring(0, MAX_TEXT_CHARS);
+        }
+
+        return text;
     }
 
-    private List<ScrapedDriveDTO> extractListingsFromUrl(String url) {
+    /**
+     * Sends extracted page text to Groq and parses the JSON response.
+     */
+    private List<ScrapedDriveDTO> extractFromText(String pageText, String sourceUrl) {
         String prompt = """
-                Read the page at this URL: %s
+                You are a job listing extractor. Below is text scraped from a job portal page.
 
-                List every fresher / entry-level job opening or campus placement drive
-                currently listed on this page. Only include roles for candidates with
-                0-2 years of experience or recent graduates (2023, 2024, 2025 batch).
+                Extract all fresher / entry-level job openings or campus placement drives
+                for candidates with 0-2 years experience or 2023/2024/2025 batch graduates.
 
-                Return ONLY a JSON array (no preamble, no markdown fences, no extra text)
-                in this exact shape:
+                Source URL: %s
+
+                Page content:
+                ---
+                %s
+                ---
+
+                Return ONLY a JSON array (no preamble, no markdown fences, no extra text).
+                If no fresher jobs are found, return [].
+
+                JSON shape:
                 [
                   {
                     "company": "string",
@@ -309,103 +271,84 @@ public class DriveDiscoveryService {
                     %s
                   }
                 ]
+                """.formatted(sourceUrl, pageText, sourceUrl, CATEGORY_HINT);
 
-                If there are no fresher openings on the page, return [].
-                """.formatted(url, url, CATEGORY_INSTRUCTIONS);
-
-        Map<String, Object> body = Map.of(
-                "contents", List.of(Map.of(
-                        "parts", List.of(Map.of("text", prompt))
-                )),
-                "tools", List.of(Map.of("urlContext", Map.of()))
-        );
-
-        return callGemini(body);
+        return callGroq(prompt);
     }
 
-    private List<ScrapedDriveDTO> callGemini(Map<String, Object> body) {
+    /**
+     * Calls Groq chat completions API and parses the JSON array from the response.
+     */
+    private List<ScrapedDriveDTO> callGroq(String userPrompt) {
         try {
+            Map<String, Object> body = Map.of(
+                "model", groqModel,
+                "messages", List.of(
+                    Map.of("role", "system",
+                           "content", "You are a precise JSON extractor. Always return valid JSON arrays only. No markdown, no explanations."),
+                    Map.of("role", "user", "content", userPrompt)
+                ),
+                "temperature", 0.2,
+                "max_tokens", 4096
+            );
+
             @SuppressWarnings("unchecked")
             Map<String, Object> response = restClient.post()
-                    .uri("/v1beta/models/" + model + ":generateContent?key=" + apiKey)
+                    .uri("/openai/v1/chat/completions")
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + groqApiKey)
                     .body(body)
                     .retrieve()
                     .body(Map.class);
 
-            return parseGeminiResponse(response);
+            return parseGroqResponse(response);
+
         } catch (Exception e) {
-            log.error("Gemini API call failed: {} — cause: {}", e.getMessage(),
-                    e.getCause() != null ? e.getCause().getMessage() : "none", e);
+            log.error("Groq API call failed: {}", e.getMessage(), e);
             return List.of();
         }
     }
 
     @SuppressWarnings("unchecked")
-    private List<ScrapedDriveDTO> parseGeminiResponse(Map<String, Object> response) {
+    private List<ScrapedDriveDTO> parseGroqResponse(Map<String, Object> response) {
         if (response == null) {
-            log.error("Gemini returned a null response body");
+            log.error("Groq returned null response");
             return List.of();
         }
 
         if (response.containsKey("error")) {
             Map<String, Object> err = (Map<String, Object>) response.get("error");
-            log.error("Gemini API error — code: {}, message: {}, status: {}",
-                    err.get("code"), err.get("message"), err.get("status"));
+            log.error("Groq API error: {}", err.get("message"));
             return List.of();
         }
 
         String text = null;
         try {
-            List<Map<String, Object>> candidates =
-                    (List<Map<String, Object>>) response.get("candidates");
+            List<Map<String, Object>> choices =
+                    (List<Map<String, Object>>) response.get("choices");
 
-            if (candidates == null || candidates.isEmpty()) {
-                log.error("Gemini response had no candidates. Full response: {}", response);
+            if (choices == null || choices.isEmpty()) {
+                log.error("Groq response had no choices");
                 return List.of();
             }
 
-            Map<String, Object> candidate = candidates.get(0);
-            String finishReason = (String) candidate.get("finishReason");
-
-            if (finishReason != null && !ACCEPTABLE_FINISH_REASONS.contains(finishReason)) {
-                log.warn("Gemini finished with unacceptable reason: {}. Full candidate: {}",
-                        finishReason, candidate);
-                return List.of();
-            }
-
-            Map<String, Object> content = (Map<String, Object>) candidate.get("content");
-            if (content == null) {
-                log.error("Gemini candidate had no content. finishReason={}", finishReason);
-                return List.of();
-            }
-
-            List<Map<String, Object>> parts =
-                    (List<Map<String, Object>>) content.get("parts");
-
-            if (parts == null || parts.isEmpty()) {
-                log.error("Gemini content had no parts.");
-                return List.of();
-            }
-
-            StringBuilder sb = new StringBuilder();
-            for (Map<String, Object> part : parts) {
-                Object t = part.get("text");
-                if (t instanceof String s) sb.append(s);
-            }
-            text = sb.toString().trim();
+            Map<String, Object> message =
+                    (Map<String, Object>) choices.get(0).get("message");
+            text = ((String) message.get("content")).trim();
 
             if (text.isBlank()) {
-                log.error("Gemini response had no text content. Parts were: {}", parts);
+                log.error("Groq returned empty content");
                 return List.of();
             }
 
+            // Strip markdown fences if present
             text = stripMarkdownFences(text);
 
+            // Extract JSON array
             int start = text.indexOf('[');
             int end   = text.lastIndexOf(']');
             if (start == -1 || end == -1 || end < start) {
-                log.error("No JSON array found in Gemini response. Raw text: {}", text);
+                log.error("No JSON array in Groq response. Raw: {}", text);
                 return List.of();
             }
 
@@ -413,27 +356,42 @@ public class DriveDiscoveryService {
             List<ScrapedDriveDTO> results =
                     objectMapper.readValue(json, new TypeReference<List<ScrapedDriveDTO>>() {});
 
-            log.info("Parsed {} drive(s) from Gemini response.", results.size());
+            log.info("Parsed {} drive(s) from Groq response.", results.size());
             return results;
 
         } catch (JsonProcessingException e) {
-            log.error("Failed to parse Gemini JSON. Raw text was:\n{}", text, e);
+            log.error("Failed to parse Groq JSON. Raw text:\n{}", text, e);
             return List.of();
         } catch (Exception e) {
-            log.error("Unexpected error parsing Gemini response: {}", response, e);
+            log.error("Unexpected error parsing Groq response", e);
             return List.of();
         }
     }
 
+    private boolean isGroqConfigured() {
+        if (groqApiKey == null || groqApiKey.isBlank()
+                || groqApiKey.equals("${groq.api.key}")) {
+            log.error("Groq API key is not configured. " +
+                      "Set GROQ_API_KEY as an environment variable on Render.");
+            return false;
+        }
+        return true;
+    }
+
     private static String stripMarkdownFences(String text) {
-        String t = text;
+        String t = text.trim();
         if (t.startsWith("```")) {
             int newline = t.indexOf('\n');
-            if (newline != -1) t = t.substring(newline + 1);
+            if (newline != -1) t = t.substring(newline + 1).trim();
         }
         if (t.endsWith("```")) {
             t = t.substring(0, t.lastIndexOf("```")).trim();
         }
-        return t.trim();
+        return t;
+    }
+
+    private void sleep(long ms) {
+        try { Thread.sleep(ms); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 }
