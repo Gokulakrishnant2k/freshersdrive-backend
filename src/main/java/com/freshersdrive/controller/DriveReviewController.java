@@ -1,6 +1,9 @@
 package com.freshersdrive.controller;
 
 import com.freshersdrive.entity.Drive;
+import com.freshersdrive.enums.DriveStatus;
+import com.freshersdrive.enums.ReviewStatus;
+import com.freshersdrive.repository.DriveRepository;
 import com.freshersdrive.service.DriveReviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -8,6 +11,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +22,7 @@ import java.util.Map;
 public class DriveReviewController {
 
     private final DriveReviewService driveReviewService;
+    private final DriveRepository    driveRepository;
 
     // ── Pending drives ─────────────────────────────────────────────────────
     @GetMapping("/pending")
@@ -62,11 +67,67 @@ public class DriveReviewController {
         }
     }
 
+    // ── Restore: move a rejected drive back to PENDING_REVIEW ─────────────
+    @PostMapping("/{id}/restore")
+    public ResponseEntity<Drive> restore(@PathVariable Long id) {
+        return driveRepository.findById(id)
+                .map(drive -> {
+                    drive.setReviewStatus(ReviewStatus.PENDING_REVIEW);
+                    return ResponseEntity.ok(driveRepository.save(drive));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     // ── Edit drive fields before approving ────────────────────────────────
     @PatchMapping("/{id}/edit")
     public ResponseEntity<Drive> edit(
             @PathVariable Long id,
             @RequestBody Map<String, String> fields) {
         return ResponseEntity.ok(driveReviewService.edit(id, fields));
+    }
+
+    // ── Edit via PUT (full form from AdminDiscoveryTab) ───────────────────
+    // Accepts the same shape as the edit modal form so the frontend
+    // PUT /admin/drives/{id} works without a separate DTO class.
+    @PutMapping("/{id}")
+    public ResponseEntity<Drive> editFull(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> fields) {
+        return driveRepository.findById(id)
+                .map(drive -> {
+                    if (fields.containsKey("companyName"))
+                        drive.setCompanyName((String) fields.get("companyName"));
+                    if (fields.containsKey("jobRole"))
+                        drive.setJobRole((String) fields.get("jobRole"));
+                    if (fields.containsKey("jobDescription"))
+                        drive.setJobDescription((String) fields.get("jobDescription"));
+                    if (fields.containsKey("keySkills"))
+                        drive.setKeySkills((String) fields.get("keySkills"));
+                    if (fields.containsKey("location"))
+                        drive.setLocation((String) fields.get("location"));
+                    if (fields.containsKey("ctcDisplay"))
+                        drive.setCtcDisplay((String) fields.get("ctcDisplay"));
+                    if (fields.containsKey("minCgpa") && fields.get("minCgpa") != null) {
+                        try { drive.setMinCgpa(Double.parseDouble(fields.get("minCgpa").toString())); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                    if (fields.containsKey("deadline") && fields.get("deadline") != null
+                            && !fields.get("deadline").toString().isBlank())
+                        drive.setDeadline(LocalDate.parse(fields.get("deadline").toString()));
+                    if (fields.containsKey("eligibleBranches"))
+                        drive.setEligibleBranches((String) fields.get("eligibleBranches"));
+                    if (fields.containsKey("eligibleBatches"))
+                        drive.setEligibleBatches((String) fields.get("eligibleBatches"));
+                    if (fields.containsKey("experienceLevel"))
+                        drive.setExperienceLevel((String) fields.get("experienceLevel"));
+                    if (fields.containsKey("applyLink"))
+                        drive.setApplyLink((String) fields.get("applyLink"));
+                    if (fields.containsKey("jobType"))
+                        drive.setJobType((String) fields.get("jobType"));
+                    if (fields.containsKey("autoDeleteEnabled") && fields.get("autoDeleteEnabled") != null)
+                        drive.setAutoDeleteEnabled(Boolean.parseBoolean(fields.get("autoDeleteEnabled").toString()));
+                    return ResponseEntity.ok(driveRepository.save(drive));
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 }
