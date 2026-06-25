@@ -22,44 +22,29 @@ import java.util.regex.*;
 public class RssFeedDiscoveryService {
 
     // ── RSS Feed Sources ───────────────────────────────────────────────────
-
+    // REMOVED: mbacrystalball, pagalguy, mbauniverse (pure blog feeds — no job listings)
+    // REMOVED: iimjobs (blog-heavy, unreliable RSS)
+    // REMOVED: timesjobs/shine BPO RSS (broken/redirect URLs)
+    // REMOVED: bhel/ntpc (dead XML endpoints)
     private static final List<String> RSS_FEEDS = List.of(
-        // Fresher/campus general
+        // Fresher / campus general
         "https://www.freshersworld.com/feed",
         "https://www.freshersnow.com/feed/",
         "https://dare2compete.com/feed",
-        "https://www.instahyre.com/blog/feed/",
         "https://campus.naukri.com/feed/",
-        "https://www.naukri.com/blog/feed/",
-        "https://iimjobs.com/feed/",                 // MBA-heavy job board
-        "https://www.placementindia.com/rss/core-jobs",
 
-        // Govt / sarkari (answer key etc. filtered out below)
+        // Govt / sarkari
         "https://www.freejobalert.com/feed/",
         "https://www.psualert.in/feed/",
         "https://www.rojgarresult.com/feed/",
 
-        // BPO / voice
-        "https://www.timesjobs.com/candidate/job-search.html?sequence=0&startPage=0&txtKeywords=bpo&rss=1",
-        "https://www.shine.com/job-search/bpo-jobs/rss/",
-
-        // Core engineering PSU
-        "https://www.bhel.com/rss/careers.xml",
-        "https://www.ntpc.co.in/rss/careers",
-        "https://www.oilgas.in/feed/",
+        // Core engineering / PSU
+        "https://www.placementindia.com/rss/core-jobs",
         "https://www.engineeringcareers.in/feed/",
-
-        // MBA / management-specific feeds
-        "https://www.mbacrystalball.com/feed",
-        "https://www.pagalguy.com/feed",
-        "https://www.mbauniverse.com/rss.xml",
-        "https://jobs.timesjobs.com/rss-feed.html?txtKeywords=mba&sequence=0&startPage=0"
+        "https://www.oilgas.in/feed/"
     );
 
     // ── Exclusion Keywords ──────────────────────────────────────────────────
-    // Status-update posts (admit card, answer key, result…) get stuffed with
-    // the same eligibility/vacancy boilerplate as the original notification.
-    // This gate runs FIRST and drops them regardless of other matches.
     private static final List<String> EXCLUSION_KEYWORDS = List.of(
         "answer key", "answer sheet", "admit card", "hall ticket",
         "exam result", "result declared", "result out", "merit list",
@@ -69,6 +54,20 @@ public class RssFeedDiscoveryService {
         "score card", "rank card", "interview call letter",
         "exam postponed", "exam cancelled", "revised exam date",
         "question paper", "exam analysis"
+    );
+
+    // ── Gate 1.5: Job posting signal keywords ─────────────────────────────
+    // A post MUST contain at least one of these to pass — this drops
+    // blog articles, guides, news stories, and MBA comparison posts
+    // that slip past the exclusion gate.
+    private static final List<String> JOB_SIGNAL_KEYWORDS = List.of(
+        "apply", "vacancy", "vacancies", "recruitment", "hiring", "opening",
+        "position", "recruit", "notification", "drive", "career", "job",
+        "post", "walk-in", "walkin", "registration open",
+        "applications invited", "applications are invited",
+        "last date to apply", "last date", "apply online", "apply now",
+        "job opening", "job vacancy", "fresher hiring", "campus drive",
+        "off campus", "off-campus"
     );
 
     // ── Degree Keyword Lists ───────────────────────────────────────────────
@@ -112,20 +111,22 @@ public class RssFeedDiscoveryService {
         "mba fresher", "pgdm", "mass communication", "journalism"
     );
 
-    // ── MBA / ME Keyword Lists ─────────────────────────────────────────────
-    // A post must contain AT LEAST ONE of these to be kept as MBA/ME.
-    // Without this gate, MBA posts are dropped because they don't match
-    // BTECH/ARTS/BPO/CORE buckets, and random noise isn't pulled in.
+    // ── MBA keyword list ──────────────────────────────────────────────────
+    // NOTE: deliberately narrow — only phrases that appear in *job postings*,
+    // not in blog articles about MBA programs. "mba" alone is intentionally
+    // excluded because it fires on every MBA guide/article. Use compound
+    // phrases that only job ads use.
     private static final List<String> MBA_KEYWORDS = List.of(
-        "mba", "m.b.a", "pgdm", "post graduate diploma in management",
+        "mba fresher", "mba passout", "mba 2024", "mba 2025", "mba 2026",
+        "pgdm fresher", "pgdm passout",
+        "post graduate diploma in management",
         "master of business administration",
-        "management graduate", "management trainee",
-        "business administration", "mba fresher", "mba passout",
-        "mba 2024", "mba 2025", "mba 2026",
+        "management trainee", "management graduate",
         "finance graduate", "marketing graduate", "hr graduate",
-        "operations management", "supply chain management",
-        "business analyst", "strategy analyst", "consultant trainee",
-        "associate consultant", "management consultant"
+        "operations management graduate", "supply chain graduate",
+        "associate consultant", "consultant trainee",
+        "mba hiring", "mba recruitment", "mba vacancy",
+        "mba off campus", "mba campus drive"
     );
 
     private static final List<String> ME_MTECH_KEYWORDS = List.of(
@@ -262,6 +263,7 @@ public class RssFeedDiscoveryService {
     }
 
     private static final List<Pattern> EXCLUSION_PATTERNS        = toWordBoundaryPatterns(EXCLUSION_KEYWORDS);
+    private static final List<Pattern> JOB_SIGNAL_PATTERNS       = toWordBoundaryPatterns(JOB_SIGNAL_KEYWORDS);
     private static final List<Pattern> FRESHER_PATTERNS          = toWordBoundaryPatterns(FRESHER_KEYWORDS);
     private static final List<Pattern> IT_PATTERNS               = toWordBoundaryPatterns(IT_KEYWORDS);
     private static final List<Pattern> BANKING_PATTERNS          = toWordBoundaryPatterns(BANKING_KEYWORDS);
@@ -277,7 +279,6 @@ public class RssFeedDiscoveryService {
     private static final List<Pattern> CORE_ENGINEERING_PATTERNS = toWordBoundaryPatterns(CORE_ENGINEERING_DOMAINS);
     private static final List<Pattern> CORE_COMPANY_PATTERNS     = toWordBoundaryPatterns(CORE_COMPANIES);
 
-    // Deadline: phrases like "last date: 30 June 2025", "apply by 15/07/2025"
     private static final Pattern DEADLINE_LABEL_PATTERN = Pattern.compile(
         "(?:last\\s+date|apply\\s+by|closing\\s+date|deadline|last\\s+date\\s+to\\s+apply)" +
         "\\s*[:\\-]?\\s*" +
@@ -287,13 +288,11 @@ public class RssFeedDiscoveryService {
         Pattern.CASE_INSENSITIVE
     );
 
-    // Official/apply link: <a href="..."> containing "apply", "official", "notification", "here"
     private static final Pattern OFFICIAL_LINK_PATTERN = Pattern.compile(
         "<a\\s[^>]*href=['\"]([^'\"]+)['\"][^>]*>\\s*(?:[^<]*(?:apply|official|notification|here|click)[^<]*)\\s*</a>",
         Pattern.CASE_INSENSITIVE
     );
 
-    // Any <a href="..."> — used as fallback when no labelled link found
     private static final Pattern ANY_LINK_PATTERN = Pattern.compile(
         "<a\\s[^>]*href=['\"]([^'\"]+)['\"]",
         Pattern.CASE_INSENSITIVE
@@ -361,7 +360,6 @@ public class RssFeedDiscoveryService {
         String title = entry.getTitle();
         if (title == null || title.isBlank()) return null;
 
-        // Keep raw HTML description for link extraction BEFORE stripping tags
         String rawHtmlDescription = "";
         if (entry.getDescription() != null && entry.getDescription().getValue() != null) {
             rawHtmlDescription = entry.getDescription().getValue();
@@ -371,7 +369,18 @@ public class RssFeedDiscoveryService {
         String combinedText = (title + " " + description).toLowerCase();
 
         // ── Gate 1: Hard exclusion (answer key, admit card, result…) ──────
-        if (matchesAny(combinedText, EXCLUSION_PATTERNS)) return null;
+        if (matchesAny(combinedText, EXCLUSION_PATTERNS)) {
+            log.debug("Dropped (exclusion): {}", title);
+            return null;
+        }
+
+        // ── Gate 1.5: Must look like an actual job posting ────────────────
+        // Drops blog articles, MBA guides, news, and comparison posts that
+        // slip through Gate 1 by containing MBA/BTECH keywords incidentally.
+        if (!matchesAny(combinedText, JOB_SIGNAL_PATTERNS)) {
+            log.debug("Dropped (not a job posting): {}", title);
+            return null;
+        }
 
         // ── Gate 2: Degree / domain classification ────────────────────────
         boolean isBtechRelated    = matchesAny(combinedText, BTECH_PATTERNS);
@@ -384,16 +393,13 @@ public class RssFeedDiscoveryService {
         boolean isMbaRelated      = matchesAny(combinedText, MBA_PATTERNS);
         boolean isMeRelated       = matchesAny(combinedText, ME_MTECH_PATTERNS);
 
-        // A post must belong to at least one bucket — otherwise drop it.
-        // MBA and ME are independent buckets; they don't need BTECH/ARTS/BPO to pass.
         if (!isBtechRelated && !isArtsRelated && !isBpoRelated
                 && !isCoreEngineering && !isMbaRelated && !isMeRelated) {
+            log.debug("Dropped (no degree/domain match): {}", title);
             return null;
         }
 
         // ── Gate 3: Relevance check ───────────────────────────────────────
-        // MBA/ME posts are inherently job-relevant when they pass the keyword
-        // gate above, so skip the secondary relevance check for them.
         if (!isMbaRelated && !isMeRelated) {
             boolean relevant = matchesAny(combinedText, FRESHER_PATTERNS)
                 || matchesAny(combinedText, GOVT_PATTERNS)
@@ -404,7 +410,10 @@ public class RssFeedDiscoveryService {
                 || matchesAny(combinedText, NON_VOICE_PATTERNS)
                 || matchesAny(combinedText, VOICE_PATTERNS)
                 || isCoreEngineering;
-            if (!relevant) return null;
+            if (!relevant) {
+                log.debug("Dropped (not relevant): {}", title);
+                return null;
+            }
         }
 
         String company     = extractCompany(title, description);
@@ -416,28 +425,19 @@ public class RssFeedDiscoveryService {
         String eligibility = extractEligibility(isBtechRelated, isArtsRelated, isBpoRelated,
                                                 isCoreEngineering, isMbaRelated, isMeRelated);
 
-        // ── Deadline: prefer explicit text mention; fallback to pub date ──
-        // Previous code used pub date first — so every drive showed a
-        // "guessed" deadline (pub date + 30 days) even when the actual
-        // last-date was printed in the post body. Now we look in the text
-        // first and only fall back to pub date when nothing is found.
         String deadline = extractDeadlineFromText(combinedText);
         if (deadline == null) {
             deadline = extractDeadlineFromPubDate(entry);
         }
 
-        // ── Official/apply link ───────────────────────────────────────────
-        // entry.getLink() is the RSS intermediary page (e.g. freejobalert.com
-        // post page), NOT the official notification/apply URL. We try to
-        // pull the real link out of the HTML description first.
         String officialLink = extractOfficialLink(rawHtmlDescription);
-        // Fall back to RSS link only if nothing better found
         String sourceUrl = (officialLink != null && !officialLink.isBlank())
             ? officialLink
             : entry.getLink();
 
         String desc = buildDescription(title, description);
 
+        log.debug("Accepted: [{}] {} — {}", category, company, role);
         return new ScrapedDriveDTO(company, role, location, deadline, sourceUrl, desc, category, eligibility);
     }
 
@@ -500,11 +500,6 @@ public class RssFeedDiscoveryService {
         return "India";
     }
 
-    /**
-     * Look for labelled deadline text in the post body:
-     *   "Last Date: 30 June 2025"  |  "Apply by 15/07/2025"  |  "Closing Date: 2025-07-15"
-     * Returns ISO date string (yyyy-MM-dd) or null if nothing found.
-     */
     private String extractDeadlineFromText(String text) {
         Matcher m = DEADLINE_LABEL_PATTERN.matcher(text);
         if (m.find()) {
@@ -513,10 +508,6 @@ public class RssFeedDiscoveryService {
         return null;
     }
 
-    /**
-     * Fallback: use RSS publishedDate + 30 days as an estimated deadline.
-     * This is clearly a guess — callers should log/mark it accordingly.
-     */
     private String extractDeadlineFromPubDate(SyndEntry entry) {
         if (entry.getPublishedDate() == null) return null;
         return entry.getPublishedDate()
@@ -527,29 +518,15 @@ public class RssFeedDiscoveryService {
             .format(DateTimeFormatter.ISO_LOCAL_DATE);
     }
 
-    /**
-     * Try to pull the official notification / apply link from the raw HTML
-     * description rather than using entry.getLink() (which is the RSS-site's
-     * own post page, not the official source).
-     *
-     * Strategy:
-     *   1. <a href="…"> whose anchor text contains "apply", "official",
-     *      "notification", or "here".
-     *   2. First non-RSS-site <a href="…"> in the description — i.e. a link
-     *      pointing outside the feed's own domain.
-     *   3. Returns null if nothing found; caller falls back to entry.getLink().
-     */
     private String extractOfficialLink(String rawHtml) {
         if (rawHtml == null || rawHtml.isBlank()) return null;
 
-        // Pass 1: labelled links
         Matcher m = OFFICIAL_LINK_PATTERN.matcher(rawHtml);
         while (m.find()) {
             String href = m.group(1).trim();
             if (isExternalOfficialUrl(href)) return href;
         }
 
-        // Pass 2: any link not pointing back to the feed source
         Matcher any = ANY_LINK_PATTERN.matcher(rawHtml);
         while (any.find()) {
             String href = any.group(1).trim();
@@ -559,17 +536,11 @@ public class RssFeedDiscoveryService {
         return null;
     }
 
-    /**
-     * Returns true if the URL looks like it points to an official / external
-     * page rather than back to the RSS aggregator site itself.
-     */
     private boolean isExternalOfficialUrl(String url) {
         if (url == null || url.isBlank()) return false;
         if (!url.startsWith("http")) return false;
-        // Skip relative fragments, anchors, javascript:
         if (url.startsWith("#") || url.startsWith("javascript")) return false;
 
-        // Common RSS aggregator domains — skip these; we want the real source
         String[] aggregators = {
             "freejobalert.com", "freshersworld.com", "sarkariresult.com",
             "rojgarresult.com", "freshersnow.com", "naukri.com",
@@ -589,17 +560,15 @@ public class RssFeedDiscoveryService {
                                     boolean isMba, boolean isME) {
         if (matchesAny(text, INTERNSHIP_PATTERNS)) return "INTERNSHIP";
 
-        // MBA bucket — check before generic ARTS so "mba fresher" goes here
         if (isMba) {
             if (matchesAny(text, BANKING_PATTERNS)) return "MBA_FINANCE";
             if (text.contains("marketing"))         return "MBA_MARKETING";
             if (text.contains("human resource") || text.contains(" hr ")) return "MBA_HR";
             if (text.contains("operations") || text.contains("supply chain")) return "MBA_OPERATIONS";
-            if (matchesAny(text, GOVT_PATTERNS))     return "MBA_GOVERNMENT";
+            if (matchesAny(text, GOVT_PATTERNS))    return "MBA_GOVERNMENT";
             return "MBA_GENERAL";
         }
 
-        // ME / M.Tech bucket
         if (isME) {
             if (isCoreEng) return "ME_CORE_ENGINEERING";
             if (matchesAny(text, IT_PATTERNS)) return "ME_IT";
@@ -611,9 +580,9 @@ public class RssFeedDiscoveryService {
             boolean isIntlVoice = text.contains("international voice")
                                || text.contains("us shift") || text.contains("uk shift")
                                || text.contains("night shift");
-            if (isIntlVoice)                             return "BPO_INTERNATIONAL_VOICE";
-            if (matchesAny(text, NON_VOICE_PATTERNS))    return "BPO_NON_VOICE";
-            if (matchesAny(text, VOICE_PATTERNS))        return "BPO_DOMESTIC_VOICE";
+            if (isIntlVoice)                          return "BPO_INTERNATIONAL_VOICE";
+            if (matchesAny(text, NON_VOICE_PATTERNS)) return "BPO_NON_VOICE";
+            if (matchesAny(text, VOICE_PATTERNS))     return "BPO_DOMESTIC_VOICE";
             return "BPO_GENERAL";
         }
 
@@ -644,7 +613,7 @@ public class RssFeedDiscoveryService {
 
         if (isArts) {
             if (matchesAny(text, BANKING_PATTERNS)) return "BANKING";
-            if (matchesAny(text, GOVT_PATTERNS))     return "GOVERNMENT";
+            if (matchesAny(text, GOVT_PATTERNS))    return "GOVERNMENT";
             return "ARTS";
         }
 
@@ -653,16 +622,16 @@ public class RssFeedDiscoveryService {
 
     private String extractEligibility(boolean isBtech, boolean isArts, boolean isBpo,
                                       boolean isCoreEng, boolean isMba, boolean isME) {
-        if (isMba && isME)          return "MBA / M.E / M.Tech";
-        if (isMba)                  return "MBA / PGDM";
-        if (isME && isCoreEng)      return "M.E / M.Tech (Core Engineering)";
-        if (isME)                   return "M.E / M.Tech";
-        if (isBpo)                  return "Any Graduate";
-        if (isCoreEng && isBtech)   return "B.E/B.Tech (Core Engineering)";
-        if (isCoreEng)              return "B.E/B.Tech / Diploma (Core Engineering)";
-        if (isBtech && isArts)      return "B.E/B.Tech, Arts/Science/Commerce";
-        if (isBtech)                return "B.E/B.Tech";
-        if (isArts)                 return "Arts/Science/Commerce";
+        if (isMba && isME)        return "MBA / M.E / M.Tech";
+        if (isMba)                return "MBA / PGDM";
+        if (isME && isCoreEng)    return "M.E / M.Tech (Core Engineering)";
+        if (isME)                 return "M.E / M.Tech";
+        if (isBpo)                return "Any Graduate";
+        if (isCoreEng && isBtech) return "B.E/B.Tech (Core Engineering)";
+        if (isCoreEng)            return "B.E/B.Tech / Diploma (Core Engineering)";
+        if (isBtech && isArts)    return "B.E/B.Tech, Arts/Science/Commerce";
+        if (isBtech)              return "B.E/B.Tech";
+        if (isArts)               return "Arts/Science/Commerce";
         return "Any Graduate";
     }
 

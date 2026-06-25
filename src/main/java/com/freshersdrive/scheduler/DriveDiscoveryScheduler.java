@@ -17,8 +17,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class DriveDiscoveryScheduler {
 
-    private final DriveDiscoveryService discoveryService;
-    private final DriveIngestionService ingestionService;
+    private final DriveDiscoveryService   discoveryService;
+    private final DriveIngestionService   ingestionService;
     private final RssFeedDiscoveryService rssFeedDiscoveryService;
 
     // 4 Gemini calls/day — free tier safe
@@ -35,7 +35,7 @@ public class DriveDiscoveryScheduler {
         log.info("AI discovery run complete.");
     }
 
-    // 8 Gemini calls/day — slowed from 30 min to avoid quota exhaustion
+    // 8 Gemini calls/day — runs every 3 hours
     @Scheduled(cron = "0 0 */3 * * *")
     public void runRssDiscovery() {
         log.info("Starting scheduled RSS discovery run...");
@@ -49,12 +49,13 @@ public class DriveDiscoveryScheduler {
         log.info("RSS discovery run complete.");
     }
 
-    // 42 Gemini calls/day (21 URLs x 2 runs) — runs twice a day
-    // Note: each run takes ~5 min due to 15s delay between URLs (rate limit safety)
+    // Runs twice a day — uses no-arg overload so scheduler needs no extra URLs
     @Scheduled(cron = "0 0 */12 * * *")
     public void runUrlDiscovery() {
         log.info("Starting scheduled URL scraping run...");
         try {
+            // No extraUrls — scheduler always uses the built-in TARGET_URLS list.
+            // Custom URLs are only injected via AdminDiscoveryController (manual trigger).
             List<ScrapedDriveDTO> results = discoveryService.discoverFromUrls();
             ingestionService.ingest(results, DriveSource.AI_SEARCH);
             log.info("URL scraping path returned {} candidate(s)", results.size());

@@ -55,7 +55,7 @@ public class SecurityConfig {
                 .requestMatchers("/*.html", "/css/**", "/js/**", "/static/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/test").permitAll()
                 .requestMatchers(HttpMethod.GET, "/health").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/health").permitAll() // ← added for context-path
+                .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
 
                 // ── Notification preference: must be authenticated ──────────
                 .requestMatchers(HttpMethod.GET,  "/drives/notify-preference").authenticated()
@@ -74,8 +74,8 @@ public class SecurityConfig {
                 // ── User management: admin only ─────────────────────────────
                 .requestMatchers("/admin/users/**").hasRole("ADMIN")
 
-                // ── Discovery trigger: admin only ───────────────────────────
-                .requestMatchers("/admin/discovery/**").permitAll()
+                // ── Discovery triggers: admin only (was incorrectly permitAll) ─
+                .requestMatchers("/admin/discovery/**").hasRole("ADMIN")
 
                 // ── Drive review: admin and employee ───────────────────────
                 .requestMatchers("/admin/drives/**").hasAnyRole("ADMIN", "EMPLOYEE")
