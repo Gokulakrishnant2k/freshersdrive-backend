@@ -15,6 +15,7 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface DriveRepository extends JpaRepository<Drive, Long> {
@@ -77,6 +78,19 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
         ORDER BY d.deadline ASC
     """)
     List<Drive> findTop6ByStatusAndIsFeaturedTrueOrderByDeadlineAsc(
+            @Param("status") DriveStatus status);
+
+    // ── Highlighted drives: only APPROVED — powers the Home page slider ───
+    // Kept independent of isFeatured above so curating one list never
+    // silently changes the other.
+    @Query("""
+        SELECT d FROM Drive d
+        WHERE d.status = :status
+        AND d.isHighlighted = true
+        AND d.reviewStatus = com.freshersdrive.enums.ReviewStatus.APPROVED
+        ORDER BY d.deadline ASC
+    """)
+    List<Drive> findByStatusAndIsHighlightedTrueOrderByDeadlineAsc(
             @Param("status") DriveStatus status);
 
     // ── Upcoming drives from a date: only APPROVED ─────────────────────────
@@ -159,6 +173,15 @@ public interface DriveRepository extends JpaRepository<Drive, Long> {
     List<Drive> findByReviewStatus(ReviewStatus reviewStatus);
 
     long countByReviewStatus(ReviewStatus reviewStatus);
+
+    // =========================
+    // LOCATION NORMALIZATION SUPPORT
+    // =========================
+    // Case-insensitive exact match against existing locations. Used to reuse
+    // whatever casing was saved first ("Pan India") instead of creating a new
+    // row every time "pan india" / "PAN INDIA" / "Pan  India" comes in from
+    // manual entry, AI discovery, or RSS import.
+    Optional<Drive> findFirstByLocationIgnoreCase(String location);
 
     // =========================
     // REVIEW PANEL SUPPORT

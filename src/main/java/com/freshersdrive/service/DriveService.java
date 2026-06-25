@@ -167,4 +167,17 @@ public class DriveService {
                     drive.getCompanyName(), registrations.size(), subscribers.size());
         }
     }
+    // ════════════════════════════════════════════════════════════════════════
+//  LOCATION NORMALIZATION — reuses existing casing ("Pan India") instead
+//  of inserting duplicates from manual entry, AI discovery, or RSS import.
+// ════════════════════════════════════════════════════════════════════════
+
+public String normalizeLocation(String location) {
+    if (location == null || location.isBlank()) return location;
+    String cleaned = location.trim().replaceAll("\\s+", " ");
+
+    return driveRepository.findFirstByLocationIgnoreCase(cleaned)
+            .map(Drive::getLocation)
+            .orElse(cleaned);
+}
 }

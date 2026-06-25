@@ -15,6 +15,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -49,6 +50,15 @@ public class DriveController {
     public ResponseEntity<List<Drive>> getFeaturedDrives() {
         return ResponseEntity.ok(
             driveRepository.findTop6ByStatusAndIsFeaturedTrueOrderByDeadlineAsc(DriveStatus.ACTIVE)
+        );
+    }
+
+    // ── HIGHLIGHTED DRIVES — separate curation slot, shown in the Home slider ─
+    // Independent of isFeatured on purpose, so the two lists can't collide.
+    @GetMapping("/highlighted")
+    public ResponseEntity<List<Drive>> getHighlightedDrives() {
+        return ResponseEntity.ok(
+            driveRepository.findByStatusAndIsHighlightedTrueOrderByDeadlineAsc(DriveStatus.ACTIVE)
         );
     }
 
@@ -124,7 +134,7 @@ public class DriveController {
         return ResponseEntity.ok("Drive deleted successfully");
     }
 
-    // ── TOGGLE FEATURED (highlight) ──────────────────────────────────────────
+    // ── TOGGLE FEATURED ───────────────────────────────────────────────────────
     @PatchMapping("/{id}/featured")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Map<String, Object>> toggleFeatured(@PathVariable Long id) {
@@ -141,6 +151,23 @@ public class DriveController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // ── TOGGLE HIGHLIGHTED — admins AND employees can curate this list ───────
+    @PatchMapping("/{id}/highlight")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EMPLOYEE')")
+    public ResponseEntity<Map<String, Object>> toggleHighlighted(@PathVariable Long id) {
+        return driveRepository.findById(id)
+                .map(drive -> {
+                    boolean nowHighlighted = !(Boolean.TRUE.equals(drive.getIsHighlighted()));
+                    drive.setIsHighlighted(nowHighlighted);
+                    driveRepository.save(drive);
+                    return ResponseEntity.ok(Map.<String, Object>of(
+                        "id", id,
+                        "isHighlighted", nowHighlighted
+                    ));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     // ── TOGGLE AUTO-DELETE ───────────────────────────────────────────────────
     @PatchMapping("/{id}/auto-delete")
     @PreAuthorize("hasRole('ADMIN')")
@@ -152,6 +179,43 @@ public class DriveController {
                     return ResponseEntity.ok(driveRepository.save(drive));
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    // ── ONE-TIME CLEANUP — merges already-duplicated location strings ────────
+    // e.g. "Pan India" / "pan india" / "Pan  India" all collapse to whichever
+    // casing was created first. Safe to re-run; it's a no-op once data is clean.
+    // Going forward, mapToDrive() below normalizes on every create/update so
+    // new duplicates shouldn't reappear through this controller's paths.
+    @PostMapping("/admin/normalize-locations")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> normalizeAllLocations() {
+        List<Drive> all = driveRepository.findAll();
+        Map<String, String> canonicalByKey = new LinkedHashMap<>();
+        int updated = 0;
+
+        for (Drive d : all) {
+            String loc = d.getLocation();
+            if (loc == null || loc.isBlank()) continue;
+
+            String cleaned = loc.trim().replaceAll("\\s+", " ");
+            String key = cleaned.toLowerCase();
+            String canonical = canonicalByKey.computeIfAbsent(key, k -> cleaned);
+
+            if (!loc.equals(canonical)) {
+                d.setLocation(canonical);
+                updated++;
+            }
+        }
+
+        if (updated > 0) {
+            driveRepository.saveAll(all);
+        }
+
+        return ResponseEntity.ok(Map.of(
+            "totalDrives", all.size(),
+            "locationsUpdated", updated,
+            "distinctLocationsNow", canonicalByKey.size()
+        ));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -214,7 +278,14 @@ public class DriveController {
 
         drive.setCategory(req.getCategory());
         drive.setJobType(req.getJobType());
-        drive.setLocation(req.getLocation());
+
+        // Normalized so "Pan India" / "pan india" / extra-spaced variants
+        // collapse into a single canonical row instead of duplicating.
+        // If your AI-discovery or RSS importer saves Drives directly instead
+        // of going through this controller, normalize there too — share
+        // that service file and I'll wire it in.
+        drive.setLocation(driveService.normalizeLocation(req.getLocation()));
+
         drive.setIsRemote(req.getIsRemote() != null ? req.getIsRemote() : false);
 
         drive.setCtcMin(req.getCtcMin());
@@ -242,6 +313,13 @@ public class DriveController {
         drive.setIsFeatured(req.getIsFeatured() != null ? req.getIsFeatured() : false);
         drive.setAutoDeleteEnabled(
                 req.getAutoDeleteEnabled() != null ? req.getAutoDeleteEnabled() : false);
+
+        // isHighlighted is intentionally NOT set from the DTO — it's only
+        // ever changed via PATCH /{id}/highlight, so editing a drive's
+        // details never accidentally un-highlights it. This just guards
+        // against a fresh entity's @Builder.Default not applying through
+        // the no-args constructor.
+        if (drive.getIsHighlighted() == null) drive.setIsHighlighted(false);
 
         if (drive.getViewCount() == null) drive.setViewCount(0);
 
